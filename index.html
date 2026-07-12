@@ -9,44 +9,83 @@
     padding: 0;
     width: 100%;
     height: 100%;
+    overflow: hidden;
     background: #ffffff;
   }
-  .stage {
-    width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
+  svg {
     display: block;
+    width: 100%;
+    height: 100%;
   }
 </style>
 </head>
 <body>
-  <svg class="stage" viewBox="0 0 1108 597" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <!-- Hatch pattern representing the ground -->
-      <pattern id="groundHatch" width="14" height="14" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-        <rect width="14" height="14" fill="#4d4d4d"></rect>
-        <line x1="0" y1="0" x2="0" y2="14" stroke="#5c5c5c" stroke-width="2"></line>
-      </pattern>
-    </defs>
-
-    <!-- Sky / surface area -->
-    <rect x="0" y="0" width="1108" height="290" fill="#ffffff"></rect>
-
-    <!-- Ground surface line with tick marks -->
-    <g stroke="#000000" stroke-width="2">
-      <line x1="0" y1="290" x2="1108" y2="290"></line>
-      <line x1="10"  y1="280" x2="10"  y2="290"></line>
-      <line x1="218" y1="280" x2="218" y2="290"></line>
-      <line x1="427" y1="280" x2="427" y2="290"></line>
-      <line x1="635" y1="280" x2="635" y2="290"></line>
-      <line x1="843" y1="280" x2="843" y2="290"></line>
-    </g>
-
-    <!-- Ground (underground) area -->
-    <rect x="0" y="290" width="1108" height="307" fill="url(#groundHatch)"></rect>
-
-    <!-- Subway line -->
-    <line x1="10" y1="449" x2="962" y2="449" stroke="#e3a15f" stroke-width="4" stroke-linecap="round"></line>
+  <svg id="stage" xmlns="http://www.w3.org/2000/svg">
+    <rect id="ground"></rect>
+    <line id="groundLine" stroke="#000000" stroke-width="2"></line>
+    <g id="ticks" stroke="#000000" stroke-width="2"></g>
+    <line id="subwayLine" stroke="#e3a15f" stroke-width="4" stroke-linecap="round"></line>
   </svg>
+
+<script>
+  // ===================== Variables =====================
+  var GroundColor = "#e5e5e5";   // fill color of the ground
+  var GroundLocation = 2 / 3;    // top of the ground, as a fraction of window height
+                                 // (2/3 keeps the ground in the lower 1/3 of the window)
+
+  var TickCount = 5;             // number of tick marks on the ground line
+  var TickLength = 10;           // length of each tick mark, in px
+  var SubwayDepth = 0.52;        // subway position within the ground, as a fraction of ground height
+  var SubwayStart = 0.009;       // subway left end, as a fraction of window width
+  var SubwayEnd = 0.868;         // subway right end, as a fraction of window width
+  // =====================================================
+
+  var svg = document.getElementById("stage");
+  var ground = document.getElementById("ground");
+  var groundLine = document.getElementById("groundLine");
+  var ticks = document.getElementById("ticks");
+  var subwayLine = document.getElementById("subwayLine");
+
+  function draw() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var groundTop = h * GroundLocation;
+    var groundHeight = h - groundTop;
+
+    // Ground
+    ground.setAttribute("x", 0);
+    ground.setAttribute("y", groundTop);
+    ground.setAttribute("width", w);
+    ground.setAttribute("height", groundHeight);
+    ground.setAttribute("fill", GroundColor);
+
+    // Ground surface line
+    groundLine.setAttribute("x1", 0);
+    groundLine.setAttribute("y1", groundTop);
+    groundLine.setAttribute("x2", w);
+    groundLine.setAttribute("y2", groundTop);
+
+    // Tick marks, evenly spaced along the ground line
+    var tickSpacing = w / (TickCount + 0.27);
+    var html = "";
+    for (var i = 0; i < TickCount; i++) {
+      var x = 10 + i * tickSpacing;
+      html += '<line x1="' + x + '" y1="' + (groundTop - TickLength) +
+              '" x2="' + x + '" y2="' + groundTop + '"></line>';
+    }
+    ticks.innerHTML = html;
+
+    // Subway line
+    var subwayY = groundTop + groundHeight * SubwayDepth;
+    subwayLine.setAttribute("x1", w * SubwayStart);
+    subwayLine.setAttribute("y1", subwayY);
+    subwayLine.setAttribute("x2", w * SubwayEnd);
+    subwayLine.setAttribute("y2", subwayY);
+  }
+
+  window.addEventListener("resize", draw);
+  new ResizeObserver(draw).observe(document.documentElement);
+  draw();
+</script>
 </body>
 </html>
