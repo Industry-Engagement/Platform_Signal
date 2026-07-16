@@ -6,14 +6,16 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>City Section</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/proj4@2.9.2/dist/proj4.js"></script>
 <style>
   html, body {
     margin: 0;
     padding: 0;
     width: 100%;
     height: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: hidden;
     background: var(--white, #ffffff);
     font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   }
@@ -33,7 +35,7 @@
     top: 20px;
     left: 20px;
     width: 380px;
-    z-index: 10;
+    z-index: 10000;   /* above Leaflet's panes/controls, which top out around 1000 */
   }
   .panel { margin-bottom: 26px; }
   .panel-header {
@@ -122,15 +124,46 @@
     height: 18px;
     background: var(--na, #000000);
   }
+
+  /* ---- View containers (Section View / Plan View): full screen ---- */
+  #sectionView, #planView {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #planView { display: none; }
+  #planMap { width: 100%; height: 100%; }
+
+  /* View-switch button (below the side panels, position of the panels above it never moves) */
+  #view-switch { margin-top: 4px; }
+  .view-btn {
+    display: inline-block;
+    background: var(--theme1-li, #cfeadf);
+    color: var(--na, #000000);
+    font-weight: bold;
+    font-size: 18px;
+    padding: 8px 16px;
+    cursor: pointer;
+    user-select: none;
+  }
 </style>
 </head>
 <body>
-  <svg id="stage" xmlns="http://www.w3.org/2000/svg">
-    <rect id="ground"></rect>
-    <line id="groundLine" stroke-width="2"></line>
-    <g id="ticks" stroke-width="2"></g>
-    <g id="routeLines"></g>
-  </svg>
+  <div id="sectionView">
+    <svg id="stage" xmlns="http://www.w3.org/2000/svg">
+      <rect id="ground"></rect>
+      <line id="groundLine" stroke-width="2"></line>
+      <g id="ticks" stroke-width="2"></g>
+      <g id="routeLines"></g>
+    </svg>
+    <div id="legend"><span class="sq"></span><span>=10s</span></div>
+  </div>
+
+  <div id="planView">
+    <div id="planMap"></div>
+  </div>
 
   <div id="controls">
     <div class="panel">
@@ -147,9 +180,12 @@
       <div class="panel-header">Choose a Source</div>
       <div class="panel-box" id="source-box"></div>
     </div>
-  </div>
 
-  <div id="legend"><span class="sq"></span><span>=10s</span></div>
+    <div id="view-switch">
+      <div class="view-btn" id="btn-plan-view">Plan View</div>
+      <div class="view-btn" id="btn-section-view" style="display:none;">Section View</div>
+    </div>
+  </div>
 
 <script>
   // ===================== Colors =====================
@@ -204,8 +240,8 @@
 
   // ===================== Routes =======================
   var routes = [
-    { id: "L",      label: "L",      type: "subway", color: Subway_L, shape: "circle", slot: 0, csv: "Source/Subway_L.csv" },
-    { id: "6",      label: "6",      type: "subway", color: Subway_6, shape: "circle", slot: 1 },
+    { id: "L",      label: "L",      type: "subway", color: Subway_L, shape: "circle", slot: 0, csv: "Source/Subway_L.csv", geojson: "RouteShape/NYCSubways/Subway_L.geojson" },
+    { id: "6",      label: "6",      type: "subway", color: Subway_6, shape: "circle", slot: 1, geojson: "RouteShape/NYCSubways/Subway_6.geojson" },
     { id: "B6123",  label: "B6 123", type: "plane",  color: Plane_B6, shape: "pill",   slot: 0 },
     { id: "MU5736", label: "MU5736", type: "plane",  color: NA,       shape: "pill",   slot: 1 }
   ];
@@ -243,6 +279,7 @@
     L25: "Canarsie-Rockaway Pkwy"
   };
 
+  var sectionView = document.getElementById("sectionView");
   var ground = document.getElementById("ground");
   var groundLine = document.getElementById("groundLine");
   var ticks = document.getElementById("ticks");
@@ -261,6 +298,7 @@
       selectedRoutes[route.id] = on;
       b.style.boxShadow = on ? "0 0 0 3px " + Theme1_Li : "none";
       draw();
+      syncRouteLayer(route.id);   // show/hide this route's line on the Plan View map
     });
     return b;
   }
@@ -461,6 +499,140 @@
 
   window.addEventListener("resize", draw);
   draw();
+
+  // ===================== Plan View (map) =====================
+  // NYC map, shown when "Plan View" is selected. Section View <-> Plan View
+  // never move the side panels above the switch buttons.
+  var MapCenter = [40.7128, -74.0060];  // NYC
+  var MapZoom = 12;
+  var MapTileUrl = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  var MapAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+  var planViewEl = document.getElementById("planView");
+  var btnPlanView = document.getElementById("btn-plan-view");
+  var btnSectionView = document.getElementById("btn-section-view");
+
+  var planMap = null;          // Leaflet map instance, created on first use
+  var planLayerGroup = null;   // holds every GeoJSON polyline layer added to the map
+
+  function initPlanMap() {
+    if (planMap) return;
+    planMap = L.map("planMap").setView(MapCenter, MapZoom);
+    L.tileLayer(MapTileUrl, { attribution: MapAttribution, maxZoom: 19 }).addTo(planMap);
+    planLayerGroup = L.layerGroup().addTo(planMap);
+    syncAllRouteLayers();   // apply any route selections made before the map existed
+  }
+
+  // ---- Route shapes: each route with a `geojson` file (currently only L and 6,
+  // see RouteShape/NYCSubways/Subway_L.geojson and Subway_6.geojson -- each is
+  // pre-filtered to that single route, so no other line can ever end up on the
+  // map) shows/hides its line in sync with its "Add a Route" button. ----
+  var routeGeoJsonById = {};   // route id -> GeoJSON Feature (filled once its file loads)
+  var routeMapLayerById = {};  // route id -> Leaflet layer currently on the map (if shown)
+
+  routes.forEach(function (r) {
+    if (!r.geojson) return;
+    fetch(r.geojson)
+      .then(function (res) { return res.json(); })
+      .then(function (fc) {
+        routeGeoJsonById[r.id] = fc.features[0];
+        syncRouteLayer(r.id);
+      })
+      .catch(function () { /* route shape unavailable */ });
+  });
+
+  function syncRouteLayer(routeId) {
+    var geo = routeGeoJsonById[routeId];
+    if (!geo || !planMap) return;   // no shape data for this route, or map not built yet
+    var isOn = !!selectedRoutes[routeId];
+    var onMap = !!routeMapLayerById[routeId];
+    if (isOn && !onMap) {
+      var route = routes.filter(function (r) { return r.id === routeId; })[0];
+      routeMapLayerById[routeId] = addGeoJsonPolyline(geo, { color: route.color, weight: 4 });
+    } else if (!isOn && onMap) {
+      planLayerGroup.removeLayer(routeMapLayerById[routeId]);
+      delete routeMapLayerById[routeId];
+    }
+  }
+  function syncAllRouteLayers() {
+    Object.keys(routeGeoJsonById).forEach(syncRouteLayer);
+  }
+
+  // ---- Coordinate system: all source files are EPSG:2263 (NAD83 / NY Long
+  // Island, feet). The basemap tiles only exist in Web Mercator (EPSG:3857),
+  // so the map itself stays in the default CRS and incoming 2263 coordinates
+  // are reprojected to WGS84 (lon/lat) here before being handed to Leaflet.
+  var SourceCRS = "EPSG:2263";
+  proj4.defs("EPSG:2263",
+    "+proj=lcc +lat_1=40.66666666666666 +lat_2=41.03333333333333 " +
+    "+lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 " +
+    "+y_0=0 +ellps=GRS80 +datum=NAD83 +units=us-ft +no_defs");
+
+  function reproject2263ToWgs84(coord) {
+    // proj4 takes/returns [x, y]; GeoJSON coordinates are [lon, lat] - same order.
+    return proj4(SourceCRS, "EPSG:4326", [coord[0], coord[1]]);
+  }
+  function reprojectGeometryCoords(coords) {
+    // Recurse until we hit a [x, y] pair (depth varies: Point vs LineString vs MultiLineString...).
+    if (typeof coords[0] === "number") return reproject2263ToWgs84(coords);
+    return coords.map(reprojectGeometryCoords);
+  }
+  function reprojectGeoJson(geojsonObject) {
+    var clone = JSON.parse(JSON.stringify(geojsonObject));
+    var features = clone.type === "FeatureCollection" ? clone.features
+                 : clone.type === "Feature" ? [clone]
+                 : [{ geometry: clone }];   // bare geometry object
+    features.forEach(function (f) {
+      if (f.geometry && f.geometry.coordinates) {
+        f.geometry.coordinates = reprojectGeometryCoords(f.geometry.coordinates);
+      }
+    });
+    return clone;
+  }
+
+  // ---- Interface reserved for future GeoJSON polyline loading ----
+  // Usage (later): PlanView.addGeoJsonPolyline(geojsonObject, { color: Subway_L, weight: 4 });
+  // `geojsonObject` is a GeoJSON Feature/FeatureCollection of LineString/MultiLineString,
+  // with coordinates in EPSG:2263 (feet) -- it is reprojected to WGS84 automatically.
+  // Returns the Leaflet layer that was added, so callers can remove/restyle it later.
+  function addGeoJsonPolyline(geojsonObject, style) {
+    if (!planMap) initPlanMap();
+    var wgs84Geojson = reprojectGeoJson(geojsonObject);
+    var layer = L.geoJSON(wgs84Geojson, { style: style || {} });
+    layer.addTo(planLayerGroup);
+    return layer;
+  }
+  function clearGeoJsonPolylines() {
+    if (planLayerGroup) planLayerGroup.clearLayers();
+  }
+  window.PlanView = {
+    getMap: function () { return planMap; },
+    addGeoJsonPolyline: addGeoJsonPolyline,
+    clearGeoJsonPolylines: clearGeoJsonPolylines,
+    reprojectGeoJson: reprojectGeoJson   // exposed in case a caller needs the converted data itself
+  };
+  // ==============================================================
+
+  btnPlanView.addEventListener("click", function () {
+    sectionView.style.display = "none";
+    planViewEl.style.display = "block";
+    btnPlanView.style.display = "none";
+    btnSectionView.style.display = "inline-block";
+    initPlanMap();
+    setTimeout(function () { if (planMap) planMap.invalidateSize(); }, 0);
+  });
+
+  btnSectionView.addEventListener("click", function () {
+    planViewEl.style.display = "none";
+    sectionView.style.display = "block";
+    btnSectionView.style.display = "none";
+    btnPlanView.style.display = "inline-block";
+    draw();
+  });
+
+  window.addEventListener("resize", function () {
+    if (planMap) planMap.invalidateSize();
+  });
 </script>
 </body>
 </html>
