@@ -248,7 +248,6 @@
   var Signal_0   = "#d99b8e";   // signal value 0 (red / weak)
   var Signal_1   = "#f2e6b8";   // signal value 1 (yellow / medium)
   var Signal_2   = "#bcd4a8";   // signal value 2 (green / strong)
-  var Subway_456 = "#00933C";   // live train dots for the 4/5/6 group (official MTA green)
   var SpindleColor_Gold   = "#ffb347";   // signal spindle contour lines (warm gold, brightness follows signal strength)
   // =================================================
 
@@ -349,6 +348,7 @@
       draw();
       syncRouteLayer(route.id);   // show/hide this route's line on the Plan View map
       syncThreeDRouteLayer(route.id); // keep the independent 3D map in sync
+      if (route.id in TrainColors) syncTrainVisibility(on);   // show/hide + refresh this route's live trains
     });
     return b;
   }
@@ -374,7 +374,7 @@
       stationMode = willSelect && label === "Internet Connection";
       legend.classList.toggle("on", stationMode);
       draw();
-      if (!stationMode) { activeSpindleTripId = null; clearSpindleSegment(); }   // leaving Internet Connection hides any shown spindle segment
+      if (!stationMode) { activeSpindleTripId = null; activeSpindleRouteId = null; clearSpindleSegment(); }   // leaving Internet Connection hides any shown spindle segment
     });
     sourceBox.appendChild(b);
   });
@@ -852,9 +852,9 @@
   };
   var TrainRouteFilter = {   // which route_ids to keep from each feed's entities
     L: ["L"],
-    "123456": ["4", "5", "6"]
+    "123456": ["6"]   // the combined feed also carries 1/2/3/4/5/7/S -- only 6 is kept/shown
   };
-  var TrainColors = { L: Subway_L, "4": Subway_456, "5": Subway_456, "6": Subway_456 };
+  var TrainColors = { L: Subway_L, "6": Subway_6 };
   var TrainPollIntervalMs = 15000;   // MTA asks not to poll faster than this
   var StationsUrl = "RouteShape/NYCSubways/AllSubwayStations_20260716.geojson";
 
@@ -862,15 +862,30 @@
   var trainsLayerReady = false;
   var threeDTrainsLayerReady = false;
   var trainPollingStarted = false;
-  var FeedMessage = null;
+  // Parsed once, immediately -- cheap, and must not depend on any view having been opened
+  // yet, since a route button (which can trigger an immediate refresh) is reachable before
+  // Plan View or 3D View is ever opened.
+  var FeedMessage = protobuf.parse(window.GTFS_RT_PROTO, { keepCase: true }).root
+    .lookupType("transit_realtime.FeedMessage");
 
+  var lastFetchedTrainsByRoute = {};   // route id -> most recently polled trains for that route
+                                        // (only routes that were selected at fetch time have data)
+  var MinRefreshIntervalMs = 10000;    // never actually fetch more than once every 10s
+  var lastRefreshAt = 0;
+  var pendingRefreshTimeout = null;
+
+  var trainStopsPromise = null;   // cached so both train-dot placement and the Signal Spindle
+                                   // (which also needs real station coordinates) share one fetch
   function loadTrainStops() {
-    return fetch(StationsUrl).then(function (res) { return res.json(); }).then(function (fc) {
-      fc.features.forEach(function (f) {
-        var p = f.properties;
-        TrainStops[p.stop_id] = { lat: p.stop_lat, lon: p.stop_lon, name: p.stop_name };
+    if (!trainStopsPromise) {
+      trainStopsPromise = fetch(StationsUrl).then(function (res) { return res.json(); }).then(function (fc) {
+        fc.features.forEach(function (f) {
+          var p = f.properties;
+          TrainStops[p.stop_id] = { lat: p.stop_lat, lon: p.stop_lon, name: p.stop_name };
+        });
       });
-    });
+    }
+    return trainStopsPromise;
   }
 
   function initTrainsLayer() {
@@ -924,13 +939,14 @@
         .setLngLat(e.lngLat)
         .setHTML("<strong>" + p.route + " train</strong><br/>Next stop: " + p.nextStop)
         .addTo(threeDMap);
-      // Clicking an L train, while L + Internet Connection are both selected, reveals the
-      // signal spindle for just the 500m on either side of that train (see Signal Spindle below).
-      // Tracked by tripId so refreshTrains() can keep the spindle glued to this same train as
-      // it moves on each poll.
-      if (p.route === "L" && stationMode && selectedRoutes.L) {
+      // Clicking a train on a route with spindle data (see SpindleRouteIds below), while that
+      // route + Internet Connection are both selected, reveals the signal spindle for just the
+      // 500m on either side of that train. Tracked by tripId + route so refreshTrains() can
+      // keep the spindle glued to this same train as it moves on each poll.
+      if (SpindleRouteIds.indexOf(p.route) !== -1 && stationMode && selectedRoutes[p.route]) {
         activeSpindleTripId = p.tripId;
-        showSpindleSegment(f.geometry.coordinates);
+        activeSpindleRouteId = p.route;
+        showSpindleSegment(p.route, f.geometry.coordinates);
       }
     });
     ensureTrainPolling();
@@ -939,12 +955,31 @@
   function ensureTrainPolling() {
     if (trainPollingStarted) return;
     trainPollingStarted = true;
-    var root = protobuf.parse(window.GTFS_RT_PROTO, { keepCase: true }).root;
-    FeedMessage = root.lookupType("transit_realtime.FeedMessage");
-    loadTrainStops().then(function () {
+    requestRefresh();
+    setInterval(requestRefresh, TrainPollIntervalMs);
+  }
+
+  // Every actual network refresh -- whether from the recurring poll or from a route just
+  // being selected -- goes through here, so no more than one ever fires within
+  // MinRefreshIntervalMs regardless of what triggered it.
+  function requestRefresh() {
+    var elapsed = Date.now() - lastRefreshAt;
+    if (elapsed >= MinRefreshIntervalMs) {
       refreshTrains();
-      setInterval(refreshTrains, TrainPollIntervalMs);
-    });
+    } else if (!pendingRefreshTimeout) {
+      pendingRefreshTimeout = setTimeout(function () {
+        pendingRefreshTimeout = null;
+        refreshTrains();
+      }, MinRefreshIntervalMs - elapsed);
+    }
+  }
+
+  // Shows/hides a route's trains immediately (no network call) by re-rendering from
+  // whatever was cached on the last actual fetch, then -- if the route was just turned on --
+  // asks for a real refresh so its positions aren't stale from before it was hidden.
+  function syncTrainVisibility(isOn) {
+    renderTrains();
+    if (isOn) requestRefresh();
   }
 
   function fetchTrainFeed(url) {
@@ -983,50 +1018,80 @@
     return { type: "FeatureCollection", features: features };
   }
 
-  function refreshTrains() {
-    var feedKeys = Object.keys(TrainFeeds);
-    Promise.allSettled(feedKeys.map(function (k) { return fetchTrainFeed(TrainFeeds[k]); }))
-      .then(function (results) {
-        var trains = [];
-        results.forEach(function (r, i) {
-          if (r.status === "fulfilled") {
-            trains = trains.concat(extractTrains(r.value, TrainRouteFilter[feedKeys[i]]));
-          }
-        });
-        var geojson = trainsToGeoJSON(trains);
-        var source = planMap && planMap.getSource("live-trains");
-        if (source) source.setData(geojson);
-        var threeDSource = threeDMap && threeDMap.getSource("three-d-live-trains");
-        if (threeDSource) threeDSource.setData(geojson);
+  // Only fetches feeds that carry at least one currently-selected route -- an unselected
+  // route's trains simply never get requested, let alone shown.
+  function activeFeedKeys() {
+    return Object.keys(TrainFeeds).filter(function (k) {
+      return TrainRouteFilter[k].some(function (routeId) { return selectedRoutes[routeId]; });
+    });
+  }
 
-        // Keep the spindle glued to whichever train it was opened for, if that train is
-        // still running: re-anchor it to the train's freshly-polled position. If the train
-        // has dropped out of the feed (finished its run), clear the spindle.
-        if (activeSpindleTripId) {
-          var stillRunning = geojson.features.filter(function (f) {
-            return f.properties.tripId === activeSpindleTripId;
-          })[0];
-          if (stillRunning) {
-            showSpindleSegment(stillRunning.geometry.coordinates);
-          } else {
-            activeSpindleTripId = null;
-            clearSpindleSegment();
-          }
-        }
-      })
-      .catch(function () { /* feed(s) unavailable this cycle */ });
+  function refreshTrains() {
+    lastRefreshAt = Date.now();
+    var feedKeys = activeFeedKeys();
+    if (!feedKeys.length) { renderTrains(); return; }   // nothing selected: render clears the map
+    loadTrainStops().then(function () {
+      return Promise.allSettled(feedKeys.map(function (k) { return fetchTrainFeed(TrainFeeds[k]); }));
+    }).then(function (results) {
+      results.forEach(function (r, i) {
+        if (r.status !== "fulfilled") return;
+        var trains = extractTrains(r.value, TrainRouteFilter[feedKeys[i]]);
+        TrainRouteFilter[feedKeys[i]].forEach(function (routeId) {
+          lastFetchedTrainsByRoute[routeId] = trains.filter(function (t) { return t.routeId === routeId; });
+        });
+      });
+      renderTrains();
+    }).catch(function () { /* feed(s) unavailable this cycle */ });
+  }
+
+  // Renders whatever is currently selected from the last-fetched cache -- no network call.
+  // Called both after a real fetch and immediately when a route button is toggled, so
+  // deselecting a route hides its trains right away instead of waiting for the next poll.
+  function renderTrains() {
+    var trains = [];
+    Object.keys(lastFetchedTrainsByRoute).forEach(function (routeId) {
+      if (selectedRoutes[routeId]) trains = trains.concat(lastFetchedTrainsByRoute[routeId]);
+    });
+    var geojson = trainsToGeoJSON(trains);
+    var source = planMap && planMap.getSource("live-trains");
+    if (source) source.setData(geojson);
+    var threeDSource = threeDMap && threeDMap.getSource("three-d-live-trains");
+    if (threeDSource) threeDSource.setData(geojson);
+
+    // Keep the spindle glued to whichever train it was opened for, if that train is still
+    // showing: re-anchor it to the train's latest rendered position. If the train has
+    // dropped out (finished its run, or its route just got hidden), clear the spindle.
+    if (activeSpindleTripId) {
+      var stillRunning = geojson.features.filter(function (f) {
+        return f.properties.tripId === activeSpindleTripId;
+      })[0];
+      if (stillRunning) {
+        showSpindleSegment(activeSpindleRouteId, stillRunning.geometry.coordinates);
+      } else {
+        activeSpindleTripId = null;
+        activeSpindleRouteId = null;
+        clearSpindleSegment();
+      }
+    }
   }
   // ======================================================================
 
   // ===================== Signal Spindle (3D View only) =====================
-  // Clicking an L train (while L + Internet Connection are both selected -- see the
-  // "three-d-live-trains" click handler above) reveals a tube draped along the real L-line
-  // path (RouteShape/NYCSubways/Subway_L.geojson), covering just SpindleWindowM on either
-  // side of that train. Radius at each cross-section tracks normalized signal strength
-  // directly (no tapering envelope), so the cut ends of the window are flat/open rather
-  // than pinching to a point. Data: Source/Subway_Signal_Strength/subway-web-100.min.json
-  // (L line, AVERAGE provider).
-  var SpindleSourceGeoJson = "RouteShape/NYCSubways/Subway_L.geojson";
+  // Clicking a train on a route listed in SpindleRouteIds (while that route + Internet
+  // Connection are both selected -- see the "three-d-live-trains" click handler above)
+  // reveals a tube draped along that route's real path, covering just SpindleWindowM on
+  // either side of that train. Radius at each cross-section tracks normalized signal
+  // strength directly (no tapering envelope), so the cut ends of the window are flat/open
+  // rather than pinching to a point. Data: Source/Subway_Signal_Strength/subway-web-100.min.json.
+  //
+  // The path itself is built by connecting each route's stations in order (stationNames[route]
+  // in subway-web-100.min.json, already sorted by its own `position` field 0 -> 1, cross-checked
+  // against real coordinates) rather than from the RouteShape/NYCSubways/*.geojson shape files:
+  // those turned out to encode some routes (6, at least) as hundreds of disconnected/branching
+  // 2-point fragments with no reliable stitch order, whereas the station sequence is small,
+  // already correctly ordered, and maps 1:1 onto real coordinates via TrainStops (stop code ->
+  // lat/lon). The tradeoff is a coarser (station-to-station straight-line) path.
+  var SpindleRouteIds = ["L", "6"];   // which routes get the click-to-reveal spindle feature
   var SpindleSignalJson = "Source/Subway_Signal_Strength/subway-web-100.min.json";
   var SpindleProvider = "AVERAGE";
   var SpindleWindowM = 500;          // shown length on EACH side of the clicked train
@@ -1049,67 +1114,63 @@
                                       // 0 = flush with the ground (drape mode). Update this
                                       // once real subway burial-depth data is available.
 
-  var SpindleData = null;        // { lonLat, localPts, cum, totalLen, signalValues, maxSignal, mPerDegLon, mPerDegLat }
+  var SpindleDataByRoute = {};   // route id -> { localPts, cum, totalLen, signalValues, maxSignal, mPerDegLon, mPerDegLat }
   var spindleDataLoading = false;
-  var activeSpindleTripId = null;   // tripId of the train the shown spindle is glued to, if any
+  var activeSpindleTripId = null;    // tripId of the train the shown spindle is glued to, if any
+  var activeSpindleRouteId = null;   // which route that train belongs to
 
   function loadSpindleData() {
-    if (SpindleData || spindleDataLoading) return;
+    if (spindleDataLoading || Object.keys(SpindleDataByRoute).length) return;
     spindleDataLoading = true;
     Promise.all([
-      fetch(SpindleSourceGeoJson).then(function (r) { return r.json(); }),
-      fetch(SpindleSignalJson).then(function (r) { return r.json(); })
+      fetch(SpindleSignalJson).then(function (r) { return r.json(); }),
+      loadTrainStops()   // shared with the live-train layers -- gives real lat/lon per stop code
     ]).then(function (results) {
-      var pathGeojson = reprojectGeoJson(results[0]);   // EPSG:2263 -> WGS84
-      var lonLat = pathCoordsFromGeoJson(pathGeojson);
-      // The GeoJSON's own vertex order runs Canarsie -> 8 Av, but the signal dataset's
-      // position/milepost convention (stationNames.L) runs 8 Av (position 0) -> Canarsie
-      // (position ~1). Reverse the path so distance-along-path 0 lines up with signal
-      // index 0, or the two are exactly backwards (confirmed against real station data).
-      lonLat.reverse();
-      var segs = results[1].HiRes.providerLogs.L[SpindleProvider];   // {0:{signal}, 1:{signal}, ...}
-      var signalValues = [];
-      var i = 0;
-      while (segs[i] !== undefined) { signalValues.push(segs[i].signal); i++; }
+      var signalJson = results[0];
+      SpindleRouteIds.forEach(function (routeId) {
+        var stations = signalJson.stationNames[routeId];   // already ordered by its own `position`, 0 -> 1
+        var segs = signalJson.HiRes.providerLogs[routeId][SpindleProvider];
+        var signalValues = [];
+        var i = 0;
+        while (segs[i] !== undefined) { signalValues.push(segs[i].signal); i++; }
 
-      // Local flat-earth meters: east = +lon, south = -lat (matches MercatorCoordinate's
-      // own x/y sign convention directly, so the map transform needs no extra rotation).
-      var latRef = lonLat[Math.floor(lonLat.length / 2)][1];
-      var mPerDegLat = 111320;
-      var mPerDegLon = 111320 * Math.cos(latRef * Math.PI / 180);
-      var localPts = lonLat.map(function (pt) { return [pt[0] * mPerDegLon, -pt[1] * mPerDegLat]; });
+        var lonLat = stations.map(function (st) {
+          var stop = TrainStops[st.code];
+          return stop ? [stop.lon, stop.lat] : null;
+        }).filter(Boolean);
+        if (lonLat.length < 2) return;
 
-      var cum = [0];
-      for (var j = 1; j < localPts.length; j++) {
-        var dx = localPts[j][0] - localPts[j - 1][0];
-        var dy = localPts[j][1] - localPts[j - 1][1];
-        cum.push(cum[j - 1] + Math.sqrt(dx * dx + dy * dy));
-      }
+        // Local flat-earth meters: east = +lon, south = -lat (matches MercatorCoordinate's
+        // own x/y sign convention directly, so the map transform needs no extra rotation).
+        var latRef = lonLat[Math.floor(lonLat.length / 2)][1];
+        var mPerDegLat = 111320;
+        var mPerDegLon = 111320 * Math.cos(latRef * Math.PI / 180);
+        var localPts = lonLat.map(function (pt) { return [pt[0] * mPerDegLon, -pt[1] * mPerDegLat]; });
 
-      var maxSignal = 0;
-      signalValues.forEach(function (v) { if (v > maxSignal) maxSignal = v; });
-      if (maxSignal <= 0) maxSignal = 100;
+        var cum = [0];
+        for (var j = 1; j < localPts.length; j++) {
+          var dx = localPts[j][0] - localPts[j - 1][0];
+          var dy = localPts[j][1] - localPts[j - 1][1];
+          cum.push(cum[j - 1] + Math.sqrt(dx * dx + dy * dy));
+        }
 
-      SpindleData = {
-        lonLat: lonLat, localPts: localPts, cum: cum, totalLen: cum[cum.length - 1],
-        signalValues: signalValues, maxSignal: maxSignal,
-        mPerDegLon: mPerDegLon, mPerDegLat: mPerDegLat
-      };
+        var maxSignal = 0;
+        signalValues.forEach(function (v) { if (v > maxSignal) maxSignal = v; });
+        if (maxSignal <= 0) maxSignal = 100;
+
+        SpindleDataByRoute[routeId] = {
+          localPts: localPts, cum: cum, totalLen: cum[cum.length - 1],
+          signalValues: signalValues, maxSignal: maxSignal,
+          mPerDegLon: mPerDegLon, mPerDegLat: mPerDegLat
+        };
+      });
     }).catch(function (err) { console.error("Signal spindle data failed to load:", err); })
       .then(function () { spindleDataLoading = false; });
   }
 
-  function pathCoordsFromGeoJson(geojson) {
-    var coords = [];
-    var geom = geojson.features[0].geometry;
-    var lines = geom.type === "MultiLineString" ? geom.coordinates : [geom.coordinates];
-    lines.forEach(function (line) { line.forEach(function (pt) { coords.push(pt); }); });   // [lon, lat]
-    return coords;
-  }
-
   // Point (in local east/south meters) at an arbitrary distance along the path, plus its unit tangent.
-  function pointAtDistance(d) {
-    var cum = SpindleData.cum, localPts = SpindleData.localPts;
+  function pointAtDistance(data, d) {
+    var cum = data.cum, localPts = data.localPts;
     var i = 1;
     while (i < cum.length - 1 && cum[i] < d) i++;
     var d0 = cum[i - 1], d1 = cum[i];
@@ -1124,20 +1185,20 @@
 
   // Signal strength at an arbitrary distance along the line, linearly interpolated between
   // the dataset's 100 fixed sample points (each at fraction i/99 of the total length).
-  function signalAtDistance(d) {
-    var vals = SpindleData.signalValues;
+  function signalAtDistance(data, d) {
+    var vals = data.signalValues;
     var Nv = vals.length;
-    var frac = Math.max(0, Math.min(1, d / SpindleData.totalLen)) * (Nv - 1);
+    var frac = Math.max(0, Math.min(1, d / data.totalLen)) * (Nv - 1);
     var i0 = Math.floor(frac), i1 = Math.min(Nv - 1, i0 + 1);
     var t = frac - i0;
     return vals[i0] + (vals[i1] - vals[i0]) * t;
   }
 
   // Nearest distance-along-path to an arbitrary [lon, lat] -- used to locate a clicked train.
-  function nearestDistanceAlongPath(lonLatPt) {
-    var east = lonLatPt[0] * SpindleData.mPerDegLon;
-    var south = -lonLatPt[1] * SpindleData.mPerDegLat;
-    var localPts = SpindleData.localPts, cum = SpindleData.cum;
+  function nearestDistanceAlongPath(data, lonLatPt) {
+    var east = lonLatPt[0] * data.mPerDegLon;
+    var south = -lonLatPt[1] * data.mPerDegLat;
+    var localPts = data.localPts, cum = data.cum;
     var bestDist2 = Infinity, bestAlong = 0;
     for (var i = 1; i < localPts.length; i++) {
       var p0 = localPts[i - 1], p1 = localPts[i];
@@ -1152,24 +1213,25 @@
     return bestAlong;
   }
 
-  // Builds and shows the spindle for SpindleWindowM on either side of the given [lon, lat].
-  // Replaces any previously shown segment (only one is ever shown at a time).
-  function showSpindleSegment(lonLatPt) {
-    if (!SpindleData) return;
-    var centerDist = nearestDistanceAlongPath(lonLatPt);
+  // Builds and shows the spindle for SpindleWindowM on either side of the given [lon, lat] on
+  // the given route. Replaces any previously shown segment (only one is ever shown at a time).
+  function showSpindleSegment(routeId, lonLatPt) {
+    var data = SpindleDataByRoute[routeId];
+    if (!data) return;
+    var centerDist = nearestDistanceAlongPath(data, lonLatPt);
     var start = Math.max(0, centerDist - SpindleWindowM);
-    var end = Math.min(SpindleData.totalLen, centerDist + SpindleWindowM);
+    var end = Math.min(data.totalLen, centerDist + SpindleWindowM);
     if (end <= start) return;
 
     var N = SpindleSamplesPerWindow;
     var samples = [], signals = [];
     for (var s = 0; s < N; s++) {
       var d = start + (end - start) * (s / (N - 1));
-      samples.push(pointAtDistance(d));
-      signals.push(signalAtDistance(d));
+      samples.push(pointAtDistance(data, d));
+      signals.push(signalAtDistance(data, d));
     }
 
-    var maxSignal = SpindleData.maxSignal;
+    var maxSignal = data.maxSignal;
     function normSignal(s) { return Math.max(0, Math.min(1, signals[s] / maxSignal)); }
 
     // Flat-ended: no tapering envelope -- radius follows signal strength alone, so the cut
@@ -1197,7 +1259,7 @@
     }
 
     var origin = samples[Math.floor(N / 2)];
-    var originLonLat = [origin.east / SpindleData.mPerDegLon, -origin.south / SpindleData.mPerDegLat];
+    var originLonLat = [origin.east / data.mPerDegLon, -origin.south / data.mPerDegLat];
     var segsAround = SpindleTubeSegments;
 
     // Every cross-section ring, in local (east, south, altitude) meters relative to origin.
