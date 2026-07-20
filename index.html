@@ -127,16 +127,47 @@
     background: var(--na, #000000);
   }
 
-  /* ---- View containers (Section View / Plan View): full screen ---- */
-  #sectionView, #planView {
+  /* ---- View containers (Section View / Plan View / 3D View): full screen ---- */
+  #sectionView, #planView, #threeDView {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
   }
-  #planView { display: none; }
-  #planMap { width: 100%; height: 100%; }
+  #planView, #threeDView { display: none; }
+  #planMap, #threeDMap { width: 100%; height: 100%; }
+  #threeD-camera-tools {
+    position: absolute;
+    right: 10px;
+    bottom: 28px;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    max-width: 360px;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+  }
+  #threeD-camera-tools button {
+    border: 1px solid var(--border-gray, #b0b0b0);
+    border-radius: 4px;
+    padding: 5px 9px;
+    background: var(--white, #ffffff);
+    color: var(--na, #000000);
+    font: 600 13px "Segoe UI", system-ui, sans-serif;
+    cursor: pointer;
+  }
+  #threeD-camera-tools button:hover { background: var(--theme1-li, #cfeadf); }
+  #threeD-camera-hint {
+    flex-basis: 100%;
+    color: #444444;
+    font-size: 11px;
+    text-align: right;
+  }
 
   /* View-switch button (below the side panels, position of the panels above it never moves) */
   #view-switch { margin-top: 4px; }
@@ -167,6 +198,18 @@
     <div id="planMap"></div>
   </div>
 
+  <div id="threeDView">
+    <div id="threeDMap"></div>
+    <div id="threeD-camera-tools" aria-label="3D camera controls">
+      <button type="button" data-camera-preset="top">Top</button>
+      <button type="button" data-camera-preset="oblique">Oblique</button>
+      <button type="button" data-camera-preset="side">Side</button>
+      <button type="button" data-camera-preset="city">Full City</button>
+      <button type="button" data-camera-preset="reset">Reset</button>
+      <div id="threeD-camera-hint">Drag to move · right-drag to rotate/tilt · scroll to zoom/raise camera</div>
+    </div>
+  </div>
+
   <div id="controls">
     <div class="panel">
       <div class="panel-header">Add a Route</div>
@@ -185,6 +228,7 @@
 
     <div id="view-switch">
       <div class="view-btn" id="btn-plan-view">Plan View</div>
+      <div class="view-btn" id="btn-three-d-view">3D View</div>
       <div class="view-btn" id="btn-section-view" style="display:none;">Section View</div>
     </div>
   </div>
@@ -302,6 +346,7 @@
       b.style.boxShadow = on ? "0 0 0 3px " + Theme1_Li : "none";
       draw();
       syncRouteLayer(route.id);   // show/hide this route's line on the Plan View map
+      syncThreeDRouteLayer(route.id); // keep the independent 3D map in sync
     });
     return b;
   }
@@ -517,7 +562,9 @@
   var MapAttribution = '&copy; OpenStreetMap contributors &copy; CARTO';
 
   var planViewEl = document.getElementById("planView");
+  var threeDViewEl = document.getElementById("threeDView");
   var btnPlanView = document.getElementById("btn-plan-view");
+  var btnThreeDView = document.getElementById("btn-three-d-view");
   var btnSectionView = document.getElementById("btn-section-view");
 
   var planMap = null;       // MapLibre map instance, created on first use
@@ -558,6 +605,7 @@
       .then(function (fc) {
         routeGeoJsonById[r.id] = fc.features[0];
         syncRouteLayer(r.id);
+        syncThreeDRouteLayer(r.id);
       })
       .catch(function () { /* route shape unavailable */ });
   });
@@ -650,6 +698,137 @@
   };
   // ==============================================================
 
+  // ===================== 3D View (independent map) =====================
+  // This map is created only when 3D View is first opened. Plan View keeps
+  // its existing raster basemap and camera behavior.
+  var ThreeDStyleUrl = "https://tiles.openfreemap.org/styles/liberty";
+  var threeDMap = null;
+  var threeDMapReady = false;
+  var threeDRouteLayerOnById = {};
+  var ThreeDInitialCamera = {
+    center: [-73.874, 40.777], // LaGuardia Airport, [lon, lat]
+    zoom: 14.5,
+    pitch: 60,
+    bearing: -20
+  };
+
+  function initThreeDMap() {
+    if (threeDMap) return;
+    threeDMap = new maplibregl.Map({
+      container: "threeDMap",
+      style: ThreeDStyleUrl,
+      center: ThreeDInitialCamera.center,
+      zoom: ThreeDInitialCamera.zoom,
+      pitch: ThreeDInitialCamera.pitch,
+      bearing: ThreeDInitialCamera.bearing,
+      minZoom: 1,
+      maxZoom: 20,
+      maxPitch: 85,
+      dragPan: true,
+      dragRotate: true,
+      scrollZoom: true,
+      touchZoomRotate: true,
+      pitchWithRotate: true,
+      canvasContextAttributes: { antialias: true }
+    });
+    threeDMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+    threeDMap.addControl(new maplibregl.FullscreenControl({ container: threeDViewEl }), "top-right");
+    threeDMap.on("load", function () {
+      var layers = threeDMap.getStyle().layers || [];
+      var labelLayerId;
+      for (var i = 0; i < layers.length; i++) {
+        if (layers[i].type === "symbol" && layers[i].layout && layers[i].layout["text-field"]) {
+          labelLayerId = layers[i].id;
+          break;
+        }
+      }
+      if (!threeDMap.getSource("three-d-buildings-source")) {
+        threeDMap.addSource("three-d-buildings-source", {
+          type: "vector",
+          url: "https://tiles.openfreemap.org/planet"
+        });
+      }
+      threeDMap.addLayer({
+        id: "three-d-buildings",
+        source: "three-d-buildings-source",
+        "source-layer": "building",
+        type: "fill-extrusion",
+        minzoom: 13,
+        filter: ["!=", ["get", "hide_3d"], true],
+        paint: {
+          "fill-extrusion-color": [
+            "interpolate", ["linear"], ["coalesce", ["get", "render_height"], 0],
+            0, "#d9e4df", 120, "#9abdaf", 300, "#5f8f7d"
+          ],
+          "fill-extrusion-height": ["coalesce", ["get", "render_height"], 0],
+          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+          "fill-extrusion-opacity": 0.88
+        }
+      }, labelLayerId);
+      threeDMapReady = true;
+      syncAllThreeDRouteLayers();
+      initThreeDTrainsLayer();
+    });
+  }
+
+  function setThreeDCameraPreset(preset) {
+    if (!threeDMap) return;
+    var currentCenter = threeDMap.getCenter();
+    var common = { center: [currentCenter.lng, currentCenter.lat], duration: 900 };
+    if (preset === "top") {
+      threeDMap.easeTo(Object.assign(common, { pitch: 0, bearing: 0 }));
+    } else if (preset === "oblique") {
+      threeDMap.easeTo(Object.assign(common, { pitch: 60, bearing: -20 }));
+    } else if (preset === "side") {
+      threeDMap.easeTo(Object.assign(common, { pitch: 85, bearing: -20 }));
+    } else if (preset === "city") {
+      threeDMap.flyTo({ center: [MapCenter[1], MapCenter[0]], zoom: 10.5, pitch: 55, bearing: -20, duration: 1200 });
+    } else if (preset === "reset") {
+      threeDMap.flyTo(Object.assign({ duration: 1200 }, ThreeDInitialCamera));
+    }
+  }
+
+  document.getElementById("threeD-camera-tools").addEventListener("click", function (event) {
+    var button = event.target.closest("button[data-camera-preset]");
+    if (button) setThreeDCameraPreset(button.getAttribute("data-camera-preset"));
+  });
+
+  function syncThreeDRouteLayer(routeId) {
+    var geo = routeGeoJsonById[routeId];
+    if (!geo || !threeDMapReady) return;
+    var isOn = !!selectedRoutes[routeId];
+    var onMap = !!threeDRouteLayerOnById[routeId];
+    var layerId = "three-d-route-" + routeId;
+    if (isOn && !onMap) {
+      var route = routes.filter(function (r) { return r.id === routeId; })[0];
+      threeDMap.addSource(layerId, { type: "geojson", data: reprojectGeoJson(geo) });
+      threeDMap.addLayer({
+        id: layerId,
+        type: "line",
+        source: layerId,
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": route.color,
+          "line-width": 6,
+          "line-opacity": 0.95
+        }
+      });
+      threeDRouteLayerOnById[routeId] = true;
+    } else if (!isOn && onMap) {
+      if (threeDMap.getLayer(layerId)) threeDMap.removeLayer(layerId);
+      if (threeDMap.getSource(layerId)) threeDMap.removeSource(layerId);
+      threeDRouteLayerOnById[routeId] = false;
+    }
+  }
+  function syncAllThreeDRouteLayers() {
+    Object.keys(routeGeoJsonById).forEach(syncThreeDRouteLayer);
+  }
+  window.ThreeDView = {
+    getMap: function () { return threeDMap; },
+    setCameraPreset: setThreeDCameraPreset
+  };
+  // ======================================================================
+
   // ===================== Realtime train positions =====================
   // Only two MTA GTFS-Realtime feeds are polled: the L feed, and the combined
   // "123456" feed -- which bundles 1/2/3/4/5/6/7/S onto one endpoint. From
@@ -668,6 +847,8 @@
 
   var TrainStops = {};        // GTFS stop_id -> { lat, lon, name } (from the full station file)
   var trainsLayerReady = false;
+  var threeDTrainsLayerReady = false;
+  var trainPollingStarted = false;
   var FeedMessage = null;
 
   function loadTrainStops() {
@@ -682,9 +863,6 @@
   function initTrainsLayer() {
     if (trainsLayerReady) return;
     trainsLayerReady = true;
-
-    var root = protobuf.parse(window.GTFS_RT_PROTO, { keepCase: true }).root;
-    FeedMessage = root.lookupType("transit_realtime.FeedMessage");
 
     planMap.addSource("live-trains", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     planMap.addLayer({
@@ -707,6 +885,40 @@
         .addTo(planMap);
     });
 
+    ensureTrainPolling();
+  }
+
+  function initThreeDTrainsLayer() {
+    if (threeDTrainsLayerReady) return;
+    threeDTrainsLayerReady = true;
+    threeDMap.addSource("three-d-live-trains", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    threeDMap.addLayer({
+      id: "three-d-live-trains",
+      type: "circle",
+      source: "three-d-live-trains",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 4, 16, 10],
+        "circle-color": ["get", "color"],
+        "circle-stroke-color": White,
+        "circle-stroke-width": 2,
+        "circle-opacity": 0.95
+      }
+    });
+    threeDMap.on("click", "three-d-live-trains", function (e) {
+      var p = e.features[0].properties;
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML("<strong>" + p.route + " train</strong><br/>Next stop: " + p.nextStop)
+        .addTo(threeDMap);
+    });
+    ensureTrainPolling();
+  }
+
+  function ensureTrainPolling() {
+    if (trainPollingStarted) return;
+    trainPollingStarted = true;
+    var root = protobuf.parse(window.GTFS_RT_PROTO, { keepCase: true }).root;
+    FeedMessage = root.lookupType("transit_realtime.FeedMessage");
     loadTrainStops().then(function () {
       refreshTrains();
       setInterval(refreshTrains, TrainPollIntervalMs);
@@ -759,8 +971,11 @@
             trains = trains.concat(extractTrains(r.value, TrainRouteFilter[feedKeys[i]]));
           }
         });
-        var source = planMap.getSource("live-trains");
-        if (source) source.setData(trainsToGeoJSON(trains));
+        var geojson = trainsToGeoJSON(trains);
+        var source = planMap && planMap.getSource("live-trains");
+        if (source) source.setData(geojson);
+        var threeDSource = threeDMap && threeDMap.getSource("three-d-live-trains");
+        if (threeDSource) threeDSource.setData(geojson);
       })
       .catch(function () { /* feed(s) unavailable this cycle */ });
   }
@@ -768,23 +983,39 @@
 
   btnPlanView.addEventListener("click", function () {
     sectionView.style.display = "none";
+    threeDViewEl.style.display = "none";
     planViewEl.style.display = "block";
     btnPlanView.style.display = "none";
+    btnThreeDView.style.display = "inline-block";
     btnSectionView.style.display = "inline-block";
     initPlanMap();
     setTimeout(function () { if (planMap) planMap.resize(); }, 0);
   });
 
+  btnThreeDView.addEventListener("click", function () {
+    sectionView.style.display = "none";
+    planViewEl.style.display = "none";
+    threeDViewEl.style.display = "block";
+    btnThreeDView.style.display = "none";
+    btnPlanView.style.display = "inline-block";
+    btnSectionView.style.display = "inline-block";
+    initThreeDMap();
+    setTimeout(function () { if (threeDMap) threeDMap.resize(); }, 0);
+  });
+
   btnSectionView.addEventListener("click", function () {
     planViewEl.style.display = "none";
+    threeDViewEl.style.display = "none";
     sectionView.style.display = "block";
     btnSectionView.style.display = "none";
     btnPlanView.style.display = "inline-block";
+    btnThreeDView.style.display = "inline-block";
     draw();
   });
 
   window.addEventListener("resize", function () {
     if (planMap) planMap.resize();
+    if (threeDMap) threeDMap.resize();
   });
 </script>
 </body>
