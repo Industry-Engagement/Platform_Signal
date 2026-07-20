@@ -1,0 +1,6 @@
+rule_id,priority,direction,phase,service,facility_id,facility_name,frequency_mhz,min_distance_nm,max_distance_nm,min_altitude_ft,max_altitude_ft,vertical_motion,max_ground_speed_kt,on_ground_required,confidence,notes
+LGA_GROUND,10,any,ground_taxi,ground,LGA,LAGUARDIA ATCT,121.7,0,1.5,0,250,any,50,true,high,On-ground flag is preferred; low altitude and low speed may be used as a fallback.
+LGA_ARR_FINAL,20,arrival,final_approach,tower,LGA,LAGUARDIA ATCT,118.7,0,8,0,3000,descending,,false,medium,Prototype handoff assumption; not an FAA-defined boundary.
+LGA_DEP_INITIAL,30,departure,initial_departure,tower,LGA,LAGUARDIA ATCT,118.7,0,5,0,3000,climbing,,false,medium,Prototype handoff assumption; not an FAA-defined boundary.
+LGA_ARR_APPROACH,40,arrival,arrival_approach,approach,N90,NEW YORK TRACON,120.8,8,40,0,10000,descending,,false,high,Representative primary approach frequency from the 2026-07-09 NASR cycle.
+LGA_DEP_CLIMB,50,departure,departure_climb,departure,N90,NEW YORK TRACON,120.4,5,40,0,15000,climbing,,false,high,Representative primary departure frequency from the 2026-07-09 NASR cycle.
