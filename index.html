@@ -6,9 +6,11 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>City Section</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/proj4@2.9.2/dist/proj4.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
+<script src="assets/js/gtfs-realtime.proto.js"></script>
 <style>
   html, body {
     margin: 0;
@@ -201,6 +203,7 @@
   var Signal_0   = "#d99b8e";   // signal value 0 (red / weak)
   var Signal_1   = "#f2e6b8";   // signal value 1 (yellow / medium)
   var Signal_2   = "#bcd4a8";   // signal value 2 (green / strong)
+  var Subway_456 = "#00933C";   // live train dots for the 4/5/6 group (official MTA green)
   // =================================================
 
   var SignalColors = { 0: Signal_0, 1: Signal_1, 2: Signal_2 };
@@ -502,25 +505,43 @@
 
   // ===================== Plan View (map) =====================
   // NYC map, shown when "Plan View" is selected. Section View <-> Plan View
-  // never move the side panels above the switch buttons.
-  var MapCenter = [40.7128, -74.0060];  // NYC
+  // never move the side panels above the switch buttons. Engine: MapLibre GL JS.
+  var MapCenter = [40.7128, -74.0060];  // NYC, [lat, lon]
   var MapZoom = 12;
-  var MapTileUrl = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-  var MapAttribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  var MapTileUrls = [   // CARTO Light basemap (OSM's own tile server blocks requests without a Referer)
+    "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    "https://d.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+  ];
+  var MapAttribution = '&copy; OpenStreetMap contributors &copy; CARTO';
 
   var planViewEl = document.getElementById("planView");
   var btnPlanView = document.getElementById("btn-plan-view");
   var btnSectionView = document.getElementById("btn-section-view");
 
-  var planMap = null;          // Leaflet map instance, created on first use
-  var planLayerGroup = null;   // holds every GeoJSON polyline layer added to the map
+  var planMap = null;       // MapLibre map instance, created on first use
+  var planMapReady = false; // true once the map's style has finished loading
 
   function initPlanMap() {
     if (planMap) return;
-    planMap = L.map("planMap").setView(MapCenter, MapZoom);
-    L.tileLayer(MapTileUrl, { attribution: MapAttribution, maxZoom: 19 }).addTo(planMap);
-    planLayerGroup = L.layerGroup().addTo(planMap);
-    syncAllRouteLayers();   // apply any route selections made before the map existed
+    planMap = new maplibregl.Map({
+      container: "planMap",
+      style: {
+        version: 8,
+        sources: {
+          basemap: { type: "raster", tiles: MapTileUrls, tileSize: 256, attribution: MapAttribution }
+        },
+        layers: [{ id: "basemap", type: "raster", source: "basemap" }]
+      },
+      center: [MapCenter[1], MapCenter[0]],   // MapLibre wants [lon, lat]
+      zoom: MapZoom
+    });
+    planMap.on("load", function () {
+      planMapReady = true;
+      syncAllRouteLayers();     // apply any route selections made before the map existed
+      initTrainsLayer();
+    });
   }
 
   // ---- Route shapes: each route with a `geojson` file (currently only L and 6,
@@ -528,7 +549,7 @@
   // pre-filtered to that single route, so no other line can ever end up on the
   // map) shows/hides its line in sync with its "Add a Route" button. ----
   var routeGeoJsonById = {};   // route id -> GeoJSON Feature (filled once its file loads)
-  var routeMapLayerById = {};  // route id -> Leaflet layer currently on the map (if shown)
+  var routeLayerOnById = {};   // route id -> true while its layer is on the map
 
   routes.forEach(function (r) {
     if (!r.geojson) return;
@@ -543,15 +564,17 @@
 
   function syncRouteLayer(routeId) {
     var geo = routeGeoJsonById[routeId];
-    if (!geo || !planMap) return;   // no shape data for this route, or map not built yet
+    if (!geo || !planMapReady) return;   // no shape data for this route, or map not built yet
     var isOn = !!selectedRoutes[routeId];
-    var onMap = !!routeMapLayerById[routeId];
+    var onMap = !!routeLayerOnById[routeId];
+    var layerId = "route-" + routeId;
     if (isOn && !onMap) {
       var route = routes.filter(function (r) { return r.id === routeId; })[0];
-      routeMapLayerById[routeId] = addGeoJsonPolyline(geo, { color: route.color, weight: 4 });
+      addGeoJsonPolyline(layerId, geo, { color: route.color, weight: 4 });
+      routeLayerOnById[routeId] = true;
     } else if (!isOn && onMap) {
-      planLayerGroup.removeLayer(routeMapLayerById[routeId]);
-      delete routeMapLayerById[routeId];
+      removeGeoJsonLayer(layerId);
+      routeLayerOnById[routeId] = false;
     }
   }
   function syncAllRouteLayers() {
@@ -561,7 +584,7 @@
   // ---- Coordinate system: all source files are EPSG:2263 (NAD83 / NY Long
   // Island, feet). The basemap tiles only exist in Web Mercator (EPSG:3857),
   // so the map itself stays in the default CRS and incoming 2263 coordinates
-  // are reprojected to WGS84 (lon/lat) here before being handed to Leaflet.
+  // are reprojected to WGS84 (lon/lat) here before being handed to MapLibre.
   var SourceCRS = "EPSG:2263";
   proj4.defs("EPSG:2263",
     "+proj=lcc +lat_1=40.66666666666666 +lat_2=41.03333333333333 " +
@@ -591,27 +614,157 @@
   }
 
   // ---- Interface reserved for future GeoJSON polyline loading ----
-  // Usage (later): PlanView.addGeoJsonPolyline(geojsonObject, { color: Subway_L, weight: 4 });
+  // Usage (later): PlanView.addGeoJsonPolyline("my-layer-id", geojsonObject, { color: Subway_L, weight: 4 });
   // `geojsonObject` is a GeoJSON Feature/FeatureCollection of LineString/MultiLineString,
   // with coordinates in EPSG:2263 (feet) -- it is reprojected to WGS84 automatically.
-  // Returns the Leaflet layer that was added, so callers can remove/restyle it later.
-  function addGeoJsonPolyline(geojsonObject, style) {
-    if (!planMap) initPlanMap();
+  // `layerId` must be unique; call removeGeoJsonLayer(layerId) to take it back off.
+  function addGeoJsonPolyline(layerId, geojsonObject, style) {
+    if (!planMapReady) return;
     var wgs84Geojson = reprojectGeoJson(geojsonObject);
-    var layer = L.geoJSON(wgs84Geojson, { style: style || {} });
-    layer.addTo(planLayerGroup);
-    return layer;
+    if (planMap.getSource(layerId)) {
+      planMap.getSource(layerId).setData(wgs84Geojson);
+    } else {
+      planMap.addSource(layerId, { type: "geojson", data: wgs84Geojson });
+      planMap.addLayer({
+        id: layerId,
+        type: "line",
+        source: layerId,
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": (style && style.color) || NA,
+          "line-width": (style && style.weight) || 3
+        }
+      });
+    }
   }
-  function clearGeoJsonPolylines() {
-    if (planLayerGroup) planLayerGroup.clearLayers();
+  function removeGeoJsonLayer(layerId) {
+    if (!planMapReady) return;
+    if (planMap.getLayer(layerId)) planMap.removeLayer(layerId);
+    if (planMap.getSource(layerId)) planMap.removeSource(layerId);
   }
   window.PlanView = {
     getMap: function () { return planMap; },
     addGeoJsonPolyline: addGeoJsonPolyline,
-    clearGeoJsonPolylines: clearGeoJsonPolylines,
+    removeGeoJsonLayer: removeGeoJsonLayer,
     reprojectGeoJson: reprojectGeoJson   // exposed in case a caller needs the converted data itself
   };
   // ==============================================================
+
+  // ===================== Realtime train positions =====================
+  // Only two MTA GTFS-Realtime feeds are polled: the L feed, and the combined
+  // "123456" feed -- which bundles 1/2/3/4/5/6/7/S onto one endpoint. From
+  // that bundle only 4/5/6 trains are kept (1/2/3/7/S are decoded but dropped).
+  var TrainFeeds = {
+    L:       "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l",
+    "123456":"https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs"
+  };
+  var TrainRouteFilter = {   // which route_ids to keep from each feed's entities
+    L: ["L"],
+    "123456": ["4", "5", "6"]
+  };
+  var TrainColors = { L: Subway_L, "4": Subway_456, "5": Subway_456, "6": Subway_456 };
+  var TrainPollIntervalMs = 15000;   // MTA asks not to poll faster than this
+  var StationsUrl = "RouteShape/NYCSubways/AllSubwayStations_20260716.geojson";
+
+  var TrainStops = {};        // GTFS stop_id -> { lat, lon, name } (from the full station file)
+  var trainsLayerReady = false;
+  var FeedMessage = null;
+
+  function loadTrainStops() {
+    return fetch(StationsUrl).then(function (res) { return res.json(); }).then(function (fc) {
+      fc.features.forEach(function (f) {
+        var p = f.properties;
+        TrainStops[p.stop_id] = { lat: p.stop_lat, lon: p.stop_lon, name: p.stop_name };
+      });
+    });
+  }
+
+  function initTrainsLayer() {
+    if (trainsLayerReady) return;
+    trainsLayerReady = true;
+
+    var root = protobuf.parse(window.GTFS_RT_PROTO, { keepCase: true }).root;
+    FeedMessage = root.lookupType("transit_realtime.FeedMessage");
+
+    planMap.addSource("live-trains", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    planMap.addLayer({
+      id: "live-trains",
+      type: "circle",
+      source: "live-trains",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 4, 14, 9],
+        "circle-color": ["get", "color"],
+        "circle-stroke-color": NA,
+        "circle-stroke-width": 1,
+        "circle-opacity": 0.9
+      }
+    });
+    planMap.on("click", "live-trains", function (e) {
+      var p = e.features[0].properties;
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML("<strong>" + p.route + " train</strong><br/>Next stop: " + p.nextStop)
+        .addTo(planMap);
+    });
+
+    loadTrainStops().then(function () {
+      refreshTrains();
+      setInterval(refreshTrains, TrainPollIntervalMs);
+    });
+  }
+
+  function fetchTrainFeed(url) {
+    return fetch(url)
+      .then(function (res) { return res.arrayBuffer(); })
+      .then(function (buf) { return FeedMessage.decode(new Uint8Array(buf)); });
+  }
+
+  function extractTrains(feed, keepRouteIds) {
+    var out = [];
+    for (var i = 0; i < feed.entity.length; i++) {
+      var tu = feed.entity[i].trip_update;
+      if (!tu || !tu.trip || !tu.stop_time_update || !tu.stop_time_update.length) continue;
+      if (keepRouteIds.indexOf(tu.trip.route_id) === -1) continue;   // drop routes we don't want
+      var next = tu.stop_time_update[0];
+      out.push({ routeId: tu.trip.route_id, tripId: tu.trip.trip_id, nextStopId: next.stop_id });
+    }
+    return out;
+  }
+
+  function trainsToGeoJSON(trains) {
+    var seen = {};
+    var features = [];
+    trains.forEach(function (t) {
+      if (seen[t.tripId]) return;
+      seen[t.tripId] = true;
+      var stopId = (t.nextStopId || "").replace(/[NS]$/, "");
+      var stop = TrainStops[stopId];
+      if (!stop) return;   // no coordinates for this stop, skip
+      features.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [stop.lon, stop.lat] },
+        properties: { route: t.routeId, color: TrainColors[t.routeId] || NA, nextStop: stop.name }
+      });
+    });
+    return { type: "FeatureCollection", features: features };
+  }
+
+  function refreshTrains() {
+    var feedKeys = Object.keys(TrainFeeds);
+    Promise.allSettled(feedKeys.map(function (k) { return fetchTrainFeed(TrainFeeds[k]); }))
+      .then(function (results) {
+        var trains = [];
+        results.forEach(function (r, i) {
+          if (r.status === "fulfilled") {
+            trains = trains.concat(extractTrains(r.value, TrainRouteFilter[feedKeys[i]]));
+          }
+        });
+        var source = planMap.getSource("live-trains");
+        if (source) source.setData(trainsToGeoJSON(trains));
+      })
+      .catch(function () { /* feed(s) unavailable this cycle */ });
+  }
+  // ======================================================================
 
   btnPlanView.addEventListener("click", function () {
     sectionView.style.display = "none";
@@ -619,7 +772,7 @@
     btnPlanView.style.display = "none";
     btnSectionView.style.display = "inline-block";
     initPlanMap();
-    setTimeout(function () { if (planMap) planMap.invalidateSize(); }, 0);
+    setTimeout(function () { if (planMap) planMap.resize(); }, 0);
   });
 
   btnSectionView.addEventListener("click", function () {
@@ -631,7 +784,7 @@
   });
 
   window.addEventListener("resize", function () {
-    if (planMap) planMap.invalidateSize();
+    if (planMap) planMap.resize();
   });
 </script>
 </body>
