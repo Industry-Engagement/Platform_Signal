@@ -171,7 +171,10 @@ def local_ipv4_addresses() -> list[str]:
 
 def main() -> int:
     args = parse_args()
-    tracker = FlightTracker(building_provider=OpenMapTilesBuildingProvider())
+    tracker = FlightTracker(
+        building_provider=OpenMapTilesBuildingProvider(),
+        asynchronous_signal=True,
+    )
     poller: PollingService | None = None
 
     if args.no_poll:
@@ -209,6 +212,7 @@ def main() -> int:
         server.server_close()
         if poller:
             poller.stop()
+        tracker.close()
     return 0
 
 

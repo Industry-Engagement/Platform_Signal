@@ -33,7 +33,9 @@ Python backend (server.py)
   - classifies probable/confirmed LGA traffic
   - applies phase/frequency rules only within 40 NM
   - predicts 30 one-second V2 positions and reconciles them after the next observation
-  - calculates FSPL plus dominant-building diffraction for one V2 frequency per phase
+  - calculates exact dominant-building diffraction at each actual OpenSky observation
+  - recalculates predicted FSPL every second while holding the latest observed building result
+  - processes V2 signal work asynchronously so building geometry cannot block flight refreshes
        |
        | local /api/flights, read every 5 seconds
        v
@@ -242,18 +244,9 @@ These public services do not provide a production availability guarantee.
 
 ## Click-only flight details
 
-No permanent flight table covers the map. Clicking an aircraft or its trail opens a details panel containing:
+No permanent flight table covers the map. Clicking an aircraft or its trail opens a Version 2-only details panel. The callsign remains in the header solely to identify the selected OpenSky flight; the detail rows come from `signal_v2` and show phase/frequency assignment, modeled loss, relative power, building-path status, and signal time.
 
-- ICAO24 and callsign.
-- Probable/confirmed status.
-- Inferred arrival/departure direction.
-- Inferred phase.
-- Distance to LGA.
-- Altitude, ground speed, vertical rate, and true track.
-- Inferred service and representative frequency.
-- Last position time and route observation count.
-
-Signal-quality graphics and visible detail rows remain intentionally absent until the later visualization step. The browser already receives the separate `signal_v2` timeline and emits `platform:flight-signal-v2-tick` once per second.
+The panel distinguishes a current match from a provisional or reconciled match, a one-observation transition hold, unavailable assignment, and the outside-40-NM state. One unmatched actual observation may retain the last stable V2 frequency; a second consecutive unmatched actual observation clears the frequency and stops loss calculation.
 
 ## Version 2 signal APIs
 
@@ -262,6 +255,13 @@ Signal-quality graphics and visible detail rows remain intentionally absent unti
 - `/api/signal-v2?icao24=abc123&since=UNIX_SECONDS` returns only finalized points newer than `since`.
 
 The five-second local reads never trigger OpenSky. Only the centralized 30-second polling service requests OpenSky. Predicted values are provisional until the actual B observation replaces the A-to-B interval with interpolation.
+
+`building_calculation_status` distinguishes an `observed_exact` building path from a
+`held_from_latest_observation` predicted path. The held prediction still recalculates
+position, slant distance, frequency, and FSPL for that second; only the most recent
+completed observed building obstruction is reused.
+If signal work falls behind, pending work is coalesced by aircraft so the worker
+processes the newest observation instead of building an unbounded queue.
 
 ## State-vector conversions
 

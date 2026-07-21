@@ -82,7 +82,7 @@ was_live_prediction = true
 
 For every one-second sample, use only the `most_likely_frequency_mhz` selected by the Version 2 frequency rule. Do not calculate secondary candidate-frequency loss series.
 
-The selected frequency remains stable through a phase segment unless the stateful phase rules accept a transition. If phase or frequency is unknown, signal loss is null rather than forced.
+The selected frequency remains stable through a phase segment unless the stateful phase rules accept a transition. One unmatched actual observation may temporarily retain the stable frequency with `frequency_assignment_status = held_during_transition`. Two consecutive unmatched actual observations clear the phase and frequency. If phase or frequency is unknown, signal loss is null rather than forced.
 
 ## Prototype signal origin
 
@@ -230,6 +230,7 @@ phase_confidence
 phase_segment_id
 most_likely_frequency_mhz
 frequency_confidence
+frequency_assignment_status
 site_id
 slant_distance_km
 fspl_db

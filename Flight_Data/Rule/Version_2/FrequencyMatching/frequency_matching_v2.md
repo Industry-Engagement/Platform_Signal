@@ -98,6 +98,9 @@ The initial weights are transparent prototype assumptions and must be reported i
 - A non-ground phase change normally requires support from two consecutive actual OpenSky updates.
 - An actual on-ground observation within 1.5 NM of LGA can immediately select `ground_taxi`.
 - A transition may be shown as provisional between updates, but it is reconciled when the next actual observation arrives.
+- When one actual observation has no phase match, retain the last stable V2 frequency and mark `frequency_assignment_status = held_during_transition`.
+- When two consecutive actual observations have no phase match, set phase to `unknown`, clear the frequency, and stop signal-loss calculation until V2 matches again.
+- Beyond 40 NM, clear the phase and frequency immediately with `frequency_assignment_status = outside_40_nm`.
 - If the flight becomes stale, do not continue phase transitions from predicted positions.
 
 ## Initial Version 2 representative frequencies
@@ -138,6 +141,7 @@ phase_status
 most_likely_frequency_mhz
 frequency_confidence
 frequency_status
+frequency_assignment_status
 facility_id
 matched_rule_id
 assignment_method = stateful_rule_based_v2
@@ -145,3 +149,4 @@ assignment_method = stateful_rule_based_v2
 
 `phase_status` is one of `observed`, `provisional_predicted`, `reconciled`, or `unknown`.
 
+`frequency_assignment_status` is one of `current_phase_match`, `provisional_phase_match`, `reconciled_phase_match`, `held_during_transition`, `unavailable`, or `outside_40_nm`.

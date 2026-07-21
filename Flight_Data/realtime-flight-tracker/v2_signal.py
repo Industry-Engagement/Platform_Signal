@@ -24,6 +24,18 @@ HISTORY_SECONDS = 60 * 60
 DEFAULT_BUILDING_HEIGHT_M = 10.0
 BUILDING_RETRY_SECONDS = 300.0
 ACTIVE_TIMEOUT_SECONDS = 90
+BUILDING_RESULT_FIELDS = (
+    "building_data_status",
+    "building_blocked",
+    "blocking_building_count",
+    "dominant_building_id",
+    "dominant_building_height_m",
+    "building_height_status",
+    "worst_clearance_m",
+    "fresnel_radius_m",
+    "diffraction_v",
+    "building_loss_db",
+)
 
 PHASE_FREQUENCIES: dict[str, dict[str, Any]] = {
     "ground_taxi": {
@@ -780,10 +792,13 @@ class V2FlightState:
     history: deque[dict[str, Any]] = field(default_factory=deque)
     predictions: list[dict[str, Any]] = field(default_factory=list)
     current_phase: str = "unknown"
+    frequency_assignment_status: str = "unavailable"
     pending_phase: str = "unknown"
     pending_count: int = 0
+    unknown_actual_count: int = 0
     last_direction: str = "unknown"
     last_status: str = "unknown"
+    last_observed_building: dict[str, Any] | None = None
 
 
 class SignalV2Engine:
@@ -807,12 +822,16 @@ class SignalV2Engine:
 
         if active and previous:
             if not state.history:
-                phase, score = self._phase_for_sample(state, previous, direction, "observed", previous_phase)
-                state.history.append(self._signal_point(icao24, previous, phase, score, "observed", 0, False))
+                phase, score, assignment = self._phase_for_sample(
+                    state, previous, direction, "observed", previous_phase
+                )
+                state.history.append(
+                    self._signal_point(icao24, previous, phase, score, assignment, "observed", 0, False)
+                )
             next_time = float(previous["timestamp"]) + 1.0
             while next_time < float(observation["timestamp"]) - 1e-6:
                 interpolated = interpolate_observations(previous, observation, next_time)
-                phase, score = self._phase_for_sample(
+                phase, score, assignment = self._phase_for_sample(
                     state,
                     interpolated,
                     direction,
@@ -825,9 +844,11 @@ class SignalV2Engine:
                         interpolated,
                         phase,
                         score,
+                        assignment,
                         "interpolated_between_observations",
                         0,
                         True,
+                        building_obstruction=state.last_observed_building,
                     )
                 )
                 next_time += 1.0
@@ -839,11 +860,23 @@ class SignalV2Engine:
             self._update_phase_actual(state, observation, direction, status)
             phase = state.current_phase
             score = 1.0 if phase == "ground_taxi" else 0.9 if phase != "unknown" else 0.0
-            state.history.append(self._signal_point(icao24, observation, phase, score, "observed", 0, False))
+            observed_signal = self._signal_point(
+                icao24,
+                observation,
+                phase,
+                score,
+                state.frequency_assignment_status,
+                "observed",
+                0,
+                False,
+                calculate_building=True,
+            )
+            state.history.append(observed_signal)
+            state.last_observed_building = self._building_result(observed_signal)
             state.predictions = []
             for seconds in range(1, PREDICTION_SECONDS + 1):
                 predicted = predict_observation(state.actuals, seconds)
-                predicted_phase, predicted_score = self._phase_for_sample(
+                predicted_phase, predicted_score, predicted_assignment = self._phase_for_sample(
                     state,
                     predicted,
                     direction,
@@ -856,10 +889,12 @@ class SignalV2Engine:
                         predicted,
                         predicted_phase,
                         predicted_score,
+                        predicted_assignment,
                         "predicted",
                         seconds,
                         False,
                         source_observation_time=float(observation["timestamp"]),
+                        building_obstruction=state.last_observed_building,
                     )
                 )
             self._trim_and_normalize(state, float(observation["timestamp"]))
@@ -877,24 +912,37 @@ class SignalV2Engine:
         distance_nm = _finite(point.get("distance_nm"))
         if distance_nm is not None and distance_nm > 40.0:
             state.current_phase = "unknown"
+            state.frequency_assignment_status = "outside_40_nm"
             state.pending_phase = "unknown"
             state.pending_count = 0
+            state.unknown_actual_count = 0
             return
         if candidate == "ground_taxi":
             state.current_phase = candidate
+            state.frequency_assignment_status = "current_phase_match"
             state.pending_phase = "unknown"
             state.pending_count = 0
+            state.unknown_actual_count = 0
             return
         if candidate == "unknown":
             state.pending_phase = "unknown"
             state.pending_count = 0
+            state.unknown_actual_count += 1
+            if state.current_phase != "unknown" and state.unknown_actual_count < 2:
+                state.frequency_assignment_status = "held_during_transition"
+            else:
+                state.current_phase = "unknown"
+                state.frequency_assignment_status = "unavailable"
             return
+        state.unknown_actual_count = 0
         if state.current_phase == "unknown" and status in {"probable", "confirmed"}:
             state.current_phase = candidate
+            state.frequency_assignment_status = "current_phase_match"
             state.pending_phase = "unknown"
             state.pending_count = 0
             return
         if candidate == state.current_phase:
+            state.frequency_assignment_status = "current_phase_match"
             state.pending_phase = "unknown"
             state.pending_count = 0
             return
@@ -903,8 +951,10 @@ class SignalV2Engine:
         else:
             state.pending_phase = candidate
             state.pending_count = 1
+        state.frequency_assignment_status = "held_during_transition"
         if state.pending_count >= 2:
             state.current_phase = candidate
+            state.frequency_assignment_status = "current_phase_match"
             state.pending_phase = "unknown"
             state.pending_count = 0
 
@@ -915,13 +965,19 @@ class SignalV2Engine:
         direction: str,
         phase_status: str,
         stable_phase: str,
-    ) -> tuple[str, float]:
+    ) -> tuple[str, float, str]:
         candidate, score = classify_phase(point, direction)
+        distance_nm = _finite(point.get("distance_nm"))
+        if distance_nm is not None and distance_nm > 40.0:
+            return "unknown", 0.0, "outside_40_nm"
         if phase_status in {"provisional_predicted", "reconciled"} and candidate != "unknown":
-            return candidate, score
+            assignment = "provisional_phase_match" if phase_status == "provisional_predicted" else "reconciled_phase_match"
+            return candidate, score, assignment
         if stable_phase != "unknown":
-            return stable_phase, 0.8
-        return candidate, score
+            return stable_phase, 0.8, "held_during_transition"
+        if candidate != "unknown":
+            return candidate, score, "current_phase_match"
+        return "unknown", 0.0, "unavailable"
 
     def _signal_point(
         self,
@@ -929,10 +985,13 @@ class SignalV2Engine:
         point: dict[str, Any],
         phase: str,
         phase_score: float,
+        frequency_assignment_status: str,
         position_status: str,
         prediction_horizon_seconds: int,
         was_live_prediction: bool,
         source_observation_time: float | None = None,
+        calculate_building: bool = False,
+        building_obstruction: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         frequency_rule = PHASE_FREQUENCIES.get(phase)
         frequency = frequency_rule["frequency_mhz"] if frequency_rule else None
@@ -951,6 +1010,7 @@ class SignalV2Engine:
             "inferred_phase": phase,
             "phase_confidence": phase_score,
             "most_likely_frequency_mhz": frequency,
+            "frequency_assignment_status": frequency_assignment_status,
             "frequency_confidence": phase_score if frequency is not None else 0.0,
             "service": frequency_rule["service"] if frequency_rule else None,
             "facility_id": frequency_rule["facility_id"] if frequency_rule else None,
@@ -965,7 +1025,10 @@ class SignalV2Engine:
                     "fspl_db": None,
                     "building_data_status": "not_calculated",
                     "building_blocked": None,
+                    "blocking_building_count": 0,
                     "building_loss_db": None,
+                    "building_calculation_status": "not_calculated",
+                    "building_source_observation_time": None,
                     "total_loss_db": None,
                     "total_loss_status": "phase_or_altitude_unavailable",
                 }
@@ -974,23 +1037,55 @@ class SignalV2Engine:
         horizontal_km = _haversine_km(LGA_LAT, LGA_LON, result["aircraft_lat"], result["aircraft_lon"])
         slant_km = math.sqrt(horizontal_km**2 + ((altitude_m - PROTOTYPE_ANTENNA_ALT_M) / 1000.0) ** 2)
         fspl_db = 32.45 + 20 * math.log10(max(slant_km, 0.001)) + 20 * math.log10(frequency)
-        obstruction = self.building_provider.obstruction(
-            LGA_LAT,
-            LGA_LON,
-            PROTOTYPE_ANTENNA_ALT_M,
-            result["aircraft_lat"],
-            result["aircraft_lon"],
-            altitude_m,
-            frequency,
-        )
+        if calculate_building:
+            obstruction = self.building_provider.obstruction(
+                LGA_LAT,
+                LGA_LON,
+                PROTOTYPE_ANTENNA_ALT_M,
+                result["aircraft_lat"],
+                result["aircraft_lon"],
+                altitude_m,
+                frequency,
+            )
+            building_calculation_status = "observed_exact"
+            building_source_time = float(point["timestamp"])
+        elif building_obstruction is not None:
+            obstruction = dict(building_obstruction)
+            building_calculation_status = "held_from_latest_observation"
+            building_source_time = _finite(obstruction.pop("building_source_observation_time", None))
+        else:
+            obstruction = NoBuildingProvider().obstruction(
+                LGA_LAT,
+                LGA_LON,
+                PROTOTYPE_ANTENNA_ALT_M,
+                result["aircraft_lat"],
+                result["aircraft_lon"],
+                altitude_m,
+                frequency,
+            )
+            building_calculation_status = "unavailable"
+            building_source_time = None
         building_loss = _finite(obstruction.get("building_loss_db"))
         result.update(obstruction)
+        result["building_calculation_status"] = building_calculation_status
+        result["building_source_observation_time"] = building_source_time
         result["slant_distance_km"] = slant_km
         result["fspl_db"] = fspl_db
         result["total_loss_db"] = fspl_db + building_loss if building_loss is not None else fspl_db
-        result["total_loss_status"] = (
-            "complete" if building_loss is not None else "fspl_only_building_unavailable"
-        )
+        if building_loss is None:
+            result["total_loss_status"] = "fspl_only_building_unavailable"
+        elif building_calculation_status == "held_from_latest_observation":
+            result["total_loss_status"] = "complete_with_held_observed_building"
+        else:
+            result["total_loss_status"] = "complete"
+        return result
+
+    @staticmethod
+    def _building_result(signal_point: dict[str, Any]) -> dict[str, Any] | None:
+        if signal_point.get("building_calculation_status") != "observed_exact":
+            return None
+        result = {key: signal_point.get(key) for key in BUILDING_RESULT_FIELDS}
+        result["building_source_observation_time"] = signal_point.get("building_source_observation_time")
         return result
 
     @staticmethod

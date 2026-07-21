@@ -106,6 +106,53 @@ class BuildingLossTests(unittest.TestCase):
 
 
 class SignalEngineTests(unittest.TestCase):
+    def test_building_obstruction_runs_only_for_actual_observations(self) -> None:
+        class CountingBuildingProvider:
+            source_name = "counting_test"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def obstruction(self, *args: float) -> dict:
+                self.calls += 1
+                return {
+                    "building_data_status": "available",
+                    "building_blocked": False,
+                    "blocking_building_count": 0,
+                    "dominant_building_id": None,
+                    "dominant_building_height_m": None,
+                    "building_height_status": None,
+                    "worst_clearance_m": None,
+                    "fresnel_radius_m": None,
+                    "diffraction_v": None,
+                    "building_loss_db": 0.0,
+                }
+
+        provider = CountingBuildingProvider()
+        engine = SignalV2Engine(provider)
+        engine.ingest_actual(
+            "abc123",
+            observation(1000.0, LGA_LON + 0.04, 900.0),
+            "arrival",
+            "probable",
+        )
+        engine.ingest_actual(
+            "abc123",
+            observation(1030.0, LGA_LON + 0.02, 600.0),
+            "arrival",
+            "confirmed",
+        )
+
+        snapshot = engine.snapshot("abc123", 1030.0)
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(snapshot["current"]["building_calculation_status"], "observed_exact")
+        self.assertTrue(
+            all(
+                point["building_calculation_status"] == "held_from_latest_observation"
+                for point in snapshot["predicted_timeline"]
+            )
+        )
+
     def test_actual_endpoint_reconciles_prior_prediction_interval(self) -> None:
         engine = SignalV2Engine()
         start = observation(1000.0, LGA_LON + 0.04, 900.0)
@@ -139,6 +186,32 @@ class SignalEngineTests(unittest.TestCase):
         history = engine.history("abc123", since=1028.0)
 
         self.assertEqual([point["timestamp"] for point in history["points"]], [1029.0, 1030.0])
+
+    def test_frequency_is_held_once_then_cleared_after_two_unmatched_actuals(self) -> None:
+        engine = SignalV2Engine()
+        engine.ingest_actual(
+            "abc123",
+            observation(1000.0, LGA_LON + 0.03),
+            "arrival",
+            "probable",
+        )
+        first_unmatched = observation(1030.0, LGA_LON + 0.03)
+        first_unmatched["vertical_fpm"] = 0.0
+        engine.ingest_actual("abc123", first_unmatched, "arrival", "confirmed")
+
+        held = engine.snapshot("abc123", 1030.0)["current"]
+        self.assertEqual(held["frequency_assignment_status"], "held_during_transition")
+        self.assertEqual(held["most_likely_frequency_mhz"], 118.7)
+        self.assertIsNotNone(held["total_loss_db"])
+
+        second_unmatched = observation(1060.0, LGA_LON + 0.03)
+        second_unmatched["vertical_fpm"] = 0.0
+        engine.ingest_actual("abc123", second_unmatched, "arrival", "confirmed")
+
+        cleared = engine.snapshot("abc123", 1060.0)["current"]
+        self.assertEqual(cleared["frequency_assignment_status"], "unavailable")
+        self.assertIsNone(cleared["most_likely_frequency_mhz"])
+        self.assertIsNone(cleared["total_loss_db"])
 
 
 if __name__ == "__main__":

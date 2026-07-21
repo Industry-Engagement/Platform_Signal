@@ -108,11 +108,32 @@ class AircraftRecord:
     last_seen: float = 0.0
 
 
+@dataclass(frozen=True)
+class SignalJob:
+    icao24: str
+    observation: dict[str, Any]
+    direction: str
+    status: str
+
+
 class FlightTracker:
-    def __init__(self, building_provider: NoBuildingProvider | None = None) -> None:
+    def __init__(
+        self,
+        building_provider: NoBuildingProvider | None = None,
+        asynchronous_signal: bool = False,
+    ) -> None:
         self._lock = threading.RLock()
         self._records: dict[str, AircraftRecord] = {}
         self._signal_v2 = SignalV2Engine(building_provider)
+        self._asynchronous_signal = asynchronous_signal
+        self._signal_cache_lock = threading.RLock()
+        self._signal_snapshots: dict[str, dict[str, Any]] = {}
+        self._signal_histories: dict[str, dict[str, Any]] = {}
+        self._signal_condition = threading.Condition()
+        self._pending_signal_jobs: dict[str, SignalJob] = {}
+        self._signal_active_ids: set[str] = set()
+        self._signal_stopping = False
+        self._signal_thread: threading.Thread | None = None
         self._source_time: int | None = None
         self._service_status: dict[str, Any] = {
             "state": "starting",
@@ -120,7 +141,18 @@ class FlightTracker:
             "last_poll_at": None,
             "next_poll_at": None,
             "remaining_credits": None,
+            "signal_state": "starting" if asynchronous_signal else "synchronous",
+            "signal_message": (
+                "Waiting for eligible OpenSky observations" if asynchronous_signal else None
+            ),
         }
+        if self._asynchronous_signal:
+            self._signal_thread = threading.Thread(
+                target=self._run_signal_worker,
+                name="signal-v2-worker",
+                daemon=True,
+            )
+            self._signal_thread.start()
 
     def update_service_status(self, **values: Any) -> None:
         with self._lock:
@@ -131,15 +163,30 @@ class FlightTracker:
         source_time = int(payload.get("time") or received_at)
         states = payload.get("states") or []
 
+        signal_jobs: list[SignalJob] = []
         with self._lock:
             self._source_time = source_time
             for state in states:
                 if not isinstance(state, list):
                     continue
-                self._ingest_state(state, source_time, received_at)
+                signal_job = self._ingest_state(state, source_time, received_at)
+                if signal_job is not None:
+                    signal_jobs.append(signal_job)
             self._expire_old_records(received_at)
+            active_ids = set(self._records)
 
-    def _ingest_state(self, state: list[Any], source_time: int, received_at: float) -> None:
+        if self._asynchronous_signal:
+            self._enqueue_signal_jobs(signal_jobs, active_ids)
+        else:
+            for job in signal_jobs:
+                self._process_signal_job(job, publish_cache=False)
+
+    def _ingest_state(
+        self,
+        state: list[Any],
+        source_time: int,
+        received_at: float,
+    ) -> SignalJob | None:
         icao24 = str(_safe_index(state, 0) or "").strip().lower()
         latitude = _number(_safe_index(state, 6))
         longitude = _number(_safe_index(state, 5))
@@ -198,12 +245,96 @@ class FlightTracker:
         record.last_seen = received_at
         self._trim_history(record, received_at)
         self._update_classification(record, observation)
-        self._signal_v2.ingest_actual(
-            record.icao24,
-            observation,
-            record.direction,
-            record.status,
+        return SignalJob(
+            icao24=record.icao24,
+            observation=dict(observation),
+            direction=record.direction,
+            status=record.status,
         )
+
+    def _enqueue_signal_jobs(self, jobs: list[SignalJob], active_ids: set[str]) -> None:
+        with self._signal_condition:
+            for job in jobs:
+                self._pending_signal_jobs[job.icao24] = job
+            self._signal_active_ids = active_ids
+            pending_count = len(self._pending_signal_jobs)
+            if jobs:
+                self._signal_condition.notify()
+        if jobs:
+            self.update_service_status(
+                signal_state="queued",
+                signal_message=f"{pending_count} newest aircraft observations pending",
+            )
+
+    def _run_signal_worker(self) -> None:
+        while True:
+            with self._signal_condition:
+                self._signal_condition.wait_for(
+                    lambda: self._signal_stopping or bool(self._pending_signal_jobs)
+                )
+                if self._signal_stopping:
+                    return
+                jobs = list(self._pending_signal_jobs.values())
+                self._pending_signal_jobs.clear()
+                active_ids = set(self._signal_active_ids)
+
+            self.update_service_status(
+                signal_state="processing",
+                signal_message=f"Processing {len(jobs)} newest aircraft observations",
+            )
+            processing_error: Exception | None = None
+            for job in jobs:
+                if self._signal_stopping:
+                    return
+                try:
+                    self._process_signal_job(job, publish_cache=True)
+                except Exception as exc:
+                    processing_error = exc
+                    self.update_service_status(
+                        signal_state="error",
+                        signal_message=f"Version 2 signal processing failed: {exc}",
+                    )
+            self._signal_v2.expire(active_ids)
+            with self._signal_condition:
+                pending_count = len(self._pending_signal_jobs)
+            if processing_error is None or pending_count:
+                self.update_service_status(
+                    signal_state="queued" if pending_count else "current",
+                    signal_message=(
+                        f"{pending_count} newest aircraft observations pending"
+                        if pending_count
+                        else "Version 2 signal data is current"
+                    ),
+                )
+
+    def _process_signal_job(self, job: SignalJob, publish_cache: bool) -> None:
+        self._signal_v2.ingest_actual(
+            job.icao24,
+            job.observation,
+            job.direction,
+            job.status,
+        )
+        if not publish_cache:
+            return
+        signal_snapshot = self._signal_v2.snapshot(
+            job.icao24,
+            float(job.observation["timestamp"]),
+        )
+        signal_history = self._signal_v2.history(job.icao24)
+        with self._signal_cache_lock:
+            if signal_snapshot is not None:
+                self._signal_snapshots[job.icao24] = signal_snapshot
+            if signal_history is not None:
+                self._signal_histories[job.icao24] = signal_history
+
+    def close(self) -> None:
+        if not self._signal_thread:
+            return
+        with self._signal_condition:
+            self._signal_stopping = True
+            self._pending_signal_jobs.clear()
+            self._signal_condition.notify_all()
+        self._signal_thread.join(timeout=5)
 
     def _update_classification(self, record: AircraftRecord, current: dict[str, Any]) -> None:
         distance_nm = current["distance_nm"]
@@ -354,14 +485,55 @@ class FlightTracker:
                 expired.append(icao24)
         for icao24 in expired:
             del self._records[icao24]
-        self._signal_v2.expire(set(self._records))
+        if self._asynchronous_signal:
+            with self._signal_cache_lock:
+                for icao24 in expired:
+                    self._signal_snapshots.pop(icao24, None)
+                    self._signal_histories.pop(icao24, None)
+        else:
+            self._signal_v2.expire(set(self._records))
 
     def signal_history(self, icao24: str, since: float | None = None) -> dict[str, Any] | None:
+        key = icao24.strip().lower()
+        if self._asynchronous_signal:
+            with self._signal_cache_lock:
+                cached = self._signal_histories.get(key)
+                if cached is None:
+                    return None
+                history = dict(cached)
+                history["points"] = [
+                    dict(point)
+                    for point in cached["points"]
+                    if since is None or float(point["timestamp"]) > float(since)
+                ]
+                history["since"] = since
+                return history
         with self._lock:
-            return self._signal_v2.history(icao24.strip().lower(), since)
+            return self._signal_v2.history(key, since)
+
+    @staticmethod
+    def _advance_cached_signal(
+        signal_snapshot: dict[str, Any] | None,
+        now: float,
+    ) -> dict[str, Any] | None:
+        if signal_snapshot is None:
+            return None
+        result = dict(signal_snapshot)
+        timeline = signal_snapshot.get("predicted_timeline") or []
+        candidates = [point for point in timeline if float(point["timestamp"]) <= now]
+        if candidates:
+            result["current"] = dict(candidates[-1])
+        else:
+            result["current"] = dict(signal_snapshot["current"])
+        result["generated_at"] = now
+        return result
 
     def snapshot(self, now: float | None = None) -> dict[str, Any]:
         now = now or time.time()
+        signal_snapshots: dict[str, dict[str, Any]] = {}
+        if self._asynchronous_signal:
+            with self._signal_cache_lock:
+                signal_snapshots = dict(self._signal_snapshots)
         with self._lock:
             self._expire_old_records(now)
             flights: list[dict[str, Any]] = []
@@ -396,7 +568,11 @@ class FlightTracker:
                             }
                             for point in record.history
                         ],
-                        "signal_v2": self._signal_v2.snapshot(record.icao24, now),
+                        "signal_v2": (
+                            self._advance_cached_signal(signal_snapshots.get(record.icao24), now)
+                            if self._asynchronous_signal
+                            else self._signal_v2.snapshot(record.icao24, now)
+                        ),
                     }
                 )
             flights.sort(key=lambda item: (item["status"] != "confirmed", item["current"]["distance_nm"]))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import threading
 import unittest
 
 from backend import COLLECTION_BBOX, FlightTracker, LGA_LAT, LGA_LON
@@ -121,6 +122,57 @@ class FlightTrackerTests(unittest.TestCase):
         self.assertEqual(flight["signal_v2"]["current"]["inferred_phase"], "unknown")
         self.assertIsNone(flight["signal_v2"]["current"]["most_likely_frequency_mhz"])
         self.assertIsNone(flight["signal_v2"]["current"]["total_loss_db"])
+
+    def test_async_building_work_does_not_block_tracker_snapshot(self) -> None:
+        class BlockingBuildingProvider:
+            source_name = "blocking_test"
+
+            def __init__(self) -> None:
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def obstruction(self, *args: float) -> dict:
+                self.started.set()
+                self.release.wait(timeout=2)
+                return {
+                    "building_data_status": "available",
+                    "building_blocked": False,
+                    "blocking_building_count": 0,
+                    "dominant_building_id": None,
+                    "dominant_building_height_m": None,
+                    "building_height_status": None,
+                    "worst_clearance_m": None,
+                    "fresnel_radius_m": None,
+                    "diffraction_v": None,
+                    "building_loss_db": 0.0,
+                }
+
+        provider = BlockingBuildingProvider()
+        tracker = FlightTracker(provider, asynchronous_signal=True)
+        try:
+            for index, (distance, altitude) in enumerate(
+                [(12, 6000), (10, 5000), (9, 4000), (7, 2500)]
+            ):
+                timestamp = self.base + index * 30
+                tracker.ingest(
+                    {
+                        "time": int(timestamp),
+                        "states": [state_vector("async1", timestamp, distance, altitude, -1000)],
+                    },
+                    received_at=timestamp,
+                )
+
+            self.assertTrue(provider.started.wait(timeout=1))
+            started = time.perf_counter()
+            snapshot = tracker.snapshot(now=self.base + 90)
+            elapsed = time.perf_counter() - started
+
+            self.assertLess(elapsed, 0.25)
+            self.assertEqual(snapshot["source_time"], int(self.base + 90))
+            self.assertEqual(len(snapshot["flights"]), 1)
+        finally:
+            provider.release.set()
+            tracker.close()
 
 
 if __name__ == "__main__":
