@@ -1204,6 +1204,7 @@
   var TrainStops = {};        // GTFS stop_id -> { lat, lon, name } (from the full station file)
   var trainsLayerReady = false;
   var threeDTrainsLayerReady = false;
+  var selectedTrainTripId = null;   // tripId of the train shown in the shared details panel, if any
   var trainPollingStarted = false;
   // Parsed once, immediately -- cheap, and must not depend on any view having been opened
   // yet, since a route button (which can trigger an immediate refresh) is reachable before
@@ -1232,6 +1233,68 @@
     return trainStopsPromise;
   }
 
+  // Clicking a live train shows its details in the same side panel used for flights
+  // (rather than a maplibregl.Popup), and highlights that train as a larger white dot
+  // via the "selected" property baked into its GeoJSON feature (see trainsToGeoJSON).
+  // Selecting a train deselects any selected flight, and vice versa (see the
+  // "platform:flight-selected" listener below), so at most one of the two side panels'
+  // worth of content -- flight or train -- is ever shown at a time.
+  var trainDetailsPanel = document.getElementById("details-panel");
+
+  function renderTrainDetails(p) {
+    var color = TrainColors[p.route] || NA;
+    var statusEl = document.getElementById("details-status");
+    statusEl.textContent = "Live train";
+    statusEl.style.color = color;
+    document.getElementById("details-callsign").textContent = p.route + " Train";
+    document.getElementById("details-route").textContent = "Next stop: " + p.nextStop;
+    var rows = [
+      ["Route", p.route + " Train"],
+      ["Trip ID", p.tripId],
+      ["Next stop", p.nextStop]
+    ];
+    var body = document.getElementById("details-body");
+    body.replaceChildren.apply(body, rows.map(function (row) {
+      var tr = document.createElement("tr");
+      var th = document.createElement("th");
+      th.scope = "row";
+      th.textContent = row[0];
+      var td = document.createElement("td");
+      td.textContent = row[1];
+      tr.append(th, td);
+      return tr;
+    }));
+    document.getElementById("details-note").textContent =
+      "Position is drawn from the MTA GTFS-Realtime feed, refreshed every 15s.";
+  }
+
+  function selectTrain(p) {
+    selectedTrainTripId = p.tripId;
+    // Synchronous: integrated-flight-tracker.js's listener runs and clears any
+    // selected flight (closing the panel) before the lines below reopen it for this train.
+    document.dispatchEvent(new CustomEvent("platform:train-selected", { detail: { tripId: p.tripId, route: p.route } }));
+    renderTrainDetails(p);
+    trainDetailsPanel.classList.add("open");
+    trainDetailsPanel.setAttribute("aria-hidden", "false");
+    renderTrains();   // refresh the highlighted-dot state immediately
+  }
+
+  function closeTrainDetails() {
+    if (!selectedTrainTripId) return;
+    selectedTrainTripId = null;
+    trainDetailsPanel.classList.remove("open");
+    trainDetailsPanel.setAttribute("aria-hidden", "true");
+    renderTrains();
+  }
+
+  document.addEventListener("platform:flight-selected", function () {
+    if (selectedTrainTripId) closeTrainDetails();
+  });
+  document.getElementById("details-close").addEventListener("click", closeTrainDetails);
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") closeTrainDetails();
+  });
+
   function initTrainsLayer() {
     if (trainsLayerReady) return;
     trainsLayerReady = true;
@@ -1242,20 +1305,24 @@
       type: "circle",
       source: "live-trains",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 4, 14, 9],
-        "circle-color": ["get", "color"],
-        "circle-stroke-color": NA,
-        "circle-stroke-width": 1,
+        // A "zoom" expression may only appear at the top level of an "interpolate"/"step"
+        // expression, never nested inside "case" -- so the zoom interpolation has to stay
+        // outermost here, with "case" only used for the (zoom-independent) selected-or-not
+        // output at each stop.
+        "circle-radius": ["interpolate", ["linear"], ["zoom"],
+          9, ["case", ["boolean", ["get", "selected"], false], 10, 4],
+          14, ["case", ["boolean", ["get", "selected"], false], 14, 9]
+        ],
+        "circle-color": ["case", ["boolean", ["get", "selected"], false], White, ["get", "color"]],
+        "circle-stroke-color": ["case", ["boolean", ["get", "selected"], false], ["get", "color"], NA],
+        "circle-stroke-width": ["case", ["boolean", ["get", "selected"], false], 3, 1],
         "circle-opacity": 0.9
       }
     });
     planMap.on("click", "live-trains", function (e) {
       var f = e.features[0];
       var p = f.properties;
-      new maplibregl.Popup()
-        .setLngLat(e.lngLat)
-        .setHTML("<strong>" + p.route + " train</strong><br/>Next stop: " + p.nextStop)
-        .addTo(planMap);
+      selectTrain(p);
       // Same spindle-reveal gesture as 3D View's train click -- see the
       // "three-d-live-trains" handler below for the full explanation.
       if (SpindleRouteIds.indexOf(p.route) !== -1 && stationMode && selectedRoutes[p.route]) {
@@ -1278,20 +1345,22 @@
       type: "circle",
       source: "three-d-live-trains",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 4, 16, 10],
-        "circle-color": ["get", "color"],
-        "circle-stroke-color": White,
-        "circle-stroke-width": 2,
+        // See the matching comment in initTrainsLayer above -- zoom interpolation must stay
+        // the top-level expression, with "case" only nested inside its stop outputs.
+        "circle-radius": ["interpolate", ["linear"], ["zoom"],
+          9, ["case", ["boolean", ["get", "selected"], false], 14, 4],
+          16, ["case", ["boolean", ["get", "selected"], false], 20, 10]
+        ],
+        "circle-color": ["case", ["boolean", ["get", "selected"], false], White, ["get", "color"]],
+        "circle-stroke-color": ["case", ["boolean", ["get", "selected"], false], ["get", "color"], White],
+        "circle-stroke-width": ["case", ["boolean", ["get", "selected"], false], 3, 2],
         "circle-opacity": 0.95
       }
     });
     threeDMap.on("click", "three-d-live-trains", function (e) {
       var f = e.features[0];
       var p = f.properties;
-      new maplibregl.Popup()
-        .setLngLat(e.lngLat)
-        .setHTML("<strong>" + p.route + " train</strong><br/>Next stop: " + p.nextStop)
-        .addTo(threeDMap);
+      selectTrain(p);
       // Clicking a train on a route with spindle data (see SpindleRouteIds below), while that
       // route + Internet Connection are both selected, reveals the signal spindle for just the
       // 500m on either side of that train. Tracked by tripId + route so refreshTrains() can
@@ -1366,7 +1435,10 @@
       features.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: [stop.lon, stop.lat] },
-        properties: { route: t.routeId, tripId: t.tripId, color: TrainColors[t.routeId] || NA, nextStop: stop.name }
+        properties: {
+          route: t.routeId, tripId: t.tripId, color: TrainColors[t.routeId] || NA, nextStop: stop.name,
+          selected: t.tripId === selectedTrainTripId
+        }
       });
     });
     return { type: "FeatureCollection", features: features };
@@ -1422,6 +1494,13 @@
         updatedAt: lastTrainSourceUpdateAt
       }
     }));
+
+    // If the train shown in the details panel dropped out of the visible set (its route was
+    // hidden, or it finished its run), close the panel rather than leave it showing a train
+    // that no longer has a dot on the map.
+    if (selectedTrainTripId && !geojson.features.some(function (f) { return f.properties.tripId === selectedTrainTripId; })) {
+      closeTrainDetails();
+    }
 
     // Keep the spindle glued to whichever train it was opened for, if that train is still
     // showing: re-anchor it to the train's latest rendered position. If the train has

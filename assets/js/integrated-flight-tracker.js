@@ -342,6 +342,9 @@
     state.selectedIcao24 = icao24;
     var flight = state.flights.find(function (item) { return item.icao24 === icao24; });
     if (!flight) return;
+    // Synchronous: index.html's listener runs and clears any selected train
+    // (closing the panel) before the lines below reopen it for this flight.
+    document.dispatchEvent(new CustomEvent("platform:flight-selected", { detail: { icao24: icao24 } }));
     renderDetails(flight);
     renderFlightButtons();
     ui.detailsPanel.classList.add("open");
@@ -499,6 +502,9 @@
   document.addEventListener("platform:three-d-subway-routes-updated", function (event) {
     state.subwayRoutes3D = (event.detail && event.detail.featureCollection) || null;
     updateFlightLayers();
+  });
+  document.addEventListener("platform:train-selected", function () {
+    if (state.selectedIcao24) closeDetails();
   });
   document.addEventListener("platform:subways-updated", function (event) {
     var detail = event.detail || {};
