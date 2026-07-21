@@ -1,1 +1,3 @@
 /Flight_Data/credentials.json
+**/__pycache__/
+*.py[cod]

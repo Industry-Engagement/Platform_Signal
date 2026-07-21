@@ -370,6 +370,7 @@ class FlightTracker:
                                 "longitude": point["longitude"],
                                 "latitude": point["latitude"],
                                 "altitude_m": point["altitude_m"] or 0.0,
+                                "altitude_ft": point["altitude_ft"] or 0.0,
                                 "distance_nm": point["distance_nm"],
                                 "phase_scope": (
                                     "inside_40_nm"

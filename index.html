@@ -12,6 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
 <script src="assets/js/gtfs-realtime.proto.js"></script>
 <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/deck.gl@9.3.7/dist.min.js"></script>
 <style>
   html, body {
     margin: 0;
@@ -110,7 +111,7 @@
   }
 
   /* Legend (fixed, only shown in station mode) */
-  #legend {
+  #section-signal-legend {
     position: fixed;
     left: 20px;
     bottom: 20px;
@@ -121,8 +122,8 @@
     font-size: 18px;
     z-index: 10;
   }
-  #legend.on { display: flex; }
-  #legend .sq {
+  #section-signal-legend.on { display: flex; }
+  #section-signal-legend .sq {
     width: 18px;
     height: 18px;
     background: var(--na, #000000);
@@ -183,16 +184,60 @@
     user-select: none;
   }
 </style>
+<link rel="stylesheet" href="assets/css/integrated-interface.css">
 </head>
 <body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="eyebrow">LaGuardia &middot; KLGA / NYC Subway</span>
+      <h1>Platform Signal Realtime Tracker</h1>
+    </div>
+    <div class="topbar-actions">
+      <div class="connection" id="connection" title="OpenSky connection status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-label">Starting</span>
+      </div>
+      <div class="mode-toggle" role="group" aria-label="View mode">
+        <button class="mode-button active" id="btn-plan-view" type="button" aria-pressed="true">Plan</button>
+        <button class="mode-button" id="btn-three-d-view" type="button" aria-pressed="false">3D</button>
+        <button class="mode-button" id="btn-section-view" type="button" aria-pressed="false">Section</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="legend map-legend" aria-label="Flight and subway legend">
+    <div><span class="legend-line probable"></span>Probable flight</div>
+    <div><span class="legend-line confirmed"></span>Confirmed flight</div>
+    <div><span class="boundary-symbol"></span>40 NM boundary</div>
+    <div><span class="subway-symbol subway-l-symbol">L</span>L train</div>
+    <div><span class="subway-symbol subway-6-symbol">6</span>6 train</div>
+  </section>
+
+  <section class="map-summary" aria-live="polite">
+    <div class="summary-group" aria-label="Realtime flights">
+      <span class="summary-title">Flights</span>
+      <div><strong id="confirmed-count">0</strong><span>confirmed</span></div>
+      <div><strong id="probable-count">0</strong><span>probable</span></div>
+      <div><strong id="last-update">--</strong><span>OpenSky update</span></div>
+    </div>
+    <div class="summary-divider" aria-hidden="true"></div>
+    <div class="summary-group" aria-label="Realtime subways">
+      <span class="summary-title">Subways</span>
+      <div><strong id="subway-count">0</strong><span>L / 6 trains</span></div>
+      <div><strong id="subway-lines">L + 6</strong><span>visible lines</span></div>
+      <div><strong id="subway-update">--</strong><span>MTA update</span></div>
+    </div>
+  </section>
+
   <div id="sectionView">
     <svg id="stage" xmlns="http://www.w3.org/2000/svg">
       <rect id="ground"></rect>
       <line id="groundLine" stroke-width="2"></line>
       <g id="ticks" stroke-width="2"></g>
       <g id="routeLines"></g>
+      <g id="flightProfile"></g>
     </svg>
-    <div id="legend"><span class="sq"></span><span>=10s</span></div>
+    <div id="section-signal-legend"><span class="sq"></span><span>=10s</span></div>
   </div>
 
   <div id="planView">
@@ -213,26 +258,55 @@
 
   <div id="controls">
     <div class="panel">
-      <div class="panel-header">Add a Route</div>
+      <div class="panel-header">Route Filters</div>
       <div class="panel-box">
         <div class="group-label">Subways</div>
         <div class="btn-row" id="row-subways"></div>
-        <div class="group-label">Planes</div>
-        <div class="btn-row" id="row-planes"></div>
+        <div class="group-label">Realtime Flights</div>
+        <div class="btn-row flight-picker" id="row-planes">
+          <span class="filter-placeholder">Waiting for OpenSky...</span>
+        </div>
       </div>
     </div>
 
     <div class="panel">
-      <div class="panel-header">Choose a Source</div>
-      <div class="panel-box" id="source-box"></div>
-    </div>
-
-    <div id="view-switch">
-      <div class="view-btn" id="btn-plan-view">Plan View</div>
-      <div class="view-btn" id="btn-three-d-view">3D View</div>
-      <div class="view-btn" id="btn-section-view" style="display:none;">Section View</div>
+      <div class="panel-header">Data Filters</div>
+      <div class="panel-box filter-groups">
+        <div class="group-label">Flight status</div>
+        <div class="filter-options" id="flight-status-filter">
+          <button class="filter-option selected" type="button" data-value="all">All</button>
+          <button class="filter-option" type="button" data-value="confirmed">Confirmed</button>
+          <button class="filter-option" type="button" data-value="probable">Probable</button>
+        </div>
+        <div class="group-label">Direction</div>
+        <div class="filter-options" id="flight-direction-filter">
+          <button class="filter-option selected" type="button" data-value="all">All</button>
+          <button class="filter-option" type="button" data-value="arrival">Arrival</button>
+          <button class="filter-option" type="button" data-value="departure">Departure</button>
+        </div>
+        <div class="group-label">Signal source</div>
+        <div id="source-box"></div>
+      </div>
     </div>
   </div>
+
+  <aside class="details-panel" id="details-panel" aria-hidden="true" aria-label="Selected flight details">
+    <div class="details-header">
+      <div>
+        <span class="eyebrow" id="details-status">Selected flight</span>
+        <h2 id="details-callsign">--</h2>
+      </div>
+      <button id="details-close" class="close-button" type="button" aria-label="Close flight details">&times;</button>
+    </div>
+    <div class="details-route" id="details-route">--</div>
+    <table class="details-table"><tbody id="details-body"></tbody></table>
+    <p class="details-note" id="details-note"></p>
+  </aside>
+
+  <div class="loading-card" id="loading-card">
+    <span class="spinner"></span><span>Waiting for OpenSky data...</span>
+  </div>
+  <div class="map-message" id="map-message" role="status"></div>
 
 <script>
   // ===================== Colors =====================
@@ -241,7 +315,6 @@
   var Theme1_Li  = "#cfeadf";   // light green highlight / selection
   var Subway_L   = "#737373";   // L train (gray)
   var Subway_6   = "#396133";   // 6 train (green)
-  var Plane_B6   = "#00205B";   // JetBlue B6 (navy)
   var NA         = "#000000";   // default / unspecified (black); also ground line & ticks
   var White      = "#ffffff";   // page / panel / button backgrounds, header text
   var Border_Gray = "#b0b0b0";  // panel box border
@@ -275,7 +348,6 @@
   var RouteLineWidthThin = 2;    // route line thickness while "Internet Connection" is on
   var RouteLineEnd = 0.868;      // right end, as a fraction of window width
                                  // (left end is always LeftMargin, shared with station mode)
-  var PlaneSlots = [0.74, 0.52]; // plane line height, as a fraction of the sky (from top)
   var SubwaySlots = [0.28, 0.75];// subway line depth, as a fraction of the ground
 
   // Station mode (shown while "Internet Connection" is selected)
@@ -289,11 +361,9 @@
   // ===================== Routes =======================
   var routes = [
     { id: "L",      label: "L",      type: "subway", color: Subway_L, shape: "circle", slot: 0, csv: "Source/Subway_L.csv", geojson: "RouteShape/NYCSubways/Subway_L.geojson" },
-    { id: "6",      label: "6",      type: "subway", color: Subway_6, shape: "circle", slot: 1, geojson: "RouteShape/NYCSubways/Subway_6.geojson" },
-    { id: "B6123",  label: "B6 123", type: "plane",  color: Plane_B6, shape: "pill",   slot: 0 },
-    { id: "MU5736", label: "MU5736", type: "plane",  color: NA,       shape: "pill",   slot: 1 }
+    { id: "6",      label: "6",      type: "subway", color: Subway_6, shape: "circle", slot: 1, geojson: "RouteShape/NYCSubways/Subway_6.geojson" }
   ];
-  var selectedRoutes = {};  // id -> true when selected
+  var selectedRoutes = { L: true, "6": true };  // both supported subway routes start visible
   var csvData = {};         // route id -> { order, stations, tracks }
   var stationMode = false;  // true while "Internet Connection" is selected
 
@@ -332,8 +402,10 @@
   var groundLine = document.getElementById("groundLine");
   var ticks = document.getElementById("ticks");
   var routeLines = document.getElementById("routeLines");
+  var flightProfile = document.getElementById("flightProfile");
   var svg = document.getElementById("stage");
-  var legend = document.getElementById("legend");
+  var legend = document.getElementById("section-signal-legend");
+  var activeSectionFlight = null;
 
   // ----- Build route buttons -----
   function makeRouteButton(route) {
@@ -341,6 +413,7 @@
     b.className = "route-btn " + route.shape;
     b.textContent = route.label;
     b.style.background = route.color;
+    b.style.boxShadow = selectedRoutes[route.id] ? "0 0 0 3px " + Theme1_Li : "none";
     b.addEventListener("click", function () {
       var on = !selectedRoutes[route.id];
       selectedRoutes[route.id] = on;
@@ -481,6 +554,87 @@
     return squares + line + marks;
   }
 
+  function flightDistanceNm(a, b) {
+    var radiusNm = 3440.065;
+    var p1 = a.latitude * Math.PI / 180;
+    var p2 = b.latitude * Math.PI / 180;
+    var dp = (b.latitude - a.latitude) * Math.PI / 180;
+    var dl = (b.longitude - a.longitude) * Math.PI / 180;
+    var value = Math.sin(dp / 2) * Math.sin(dp / 2) +
+      Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+    return 2 * radiusNm * Math.asin(Math.sqrt(value));
+  }
+
+  function escapeSectionText(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+  }
+
+  // Straighten the observed ground track from left to right while preserving its real
+  // altitude changes. X is cumulative haversine distance; Y is observed altitude.
+  function renderFlightAltitudeProfile(w, groundTop) {
+    if (!activeSectionFlight || !activeSectionFlight.track) return "";
+    var points = activeSectionFlight.track.filter(function (point) {
+      return Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude));
+    });
+    if (!points.length) return "";
+
+    var cumulative = [0];
+    for (var i = 1; i < points.length; i++) {
+      cumulative.push(cumulative[i - 1] + flightDistanceNm(points[i - 1], points[i]));
+    }
+    var totalNm = Math.max(cumulative[cumulative.length - 1], 0.1);
+    var altitudes = points.map(function (point) {
+      if (Number.isFinite(Number(point.altitude_ft))) return Math.max(0, Number(point.altitude_ft));
+      return Math.max(0, Number(point.altitude_m || 0) * 3.28084);
+    });
+    var maxAltitude = Math.max.apply(null, altitudes.concat([1000]));
+    maxAltitude = Math.ceil(maxAltitude / 1000) * 1000;
+
+    var plotLeft = Math.min(430, Math.max(180, w * 0.30));
+    var detailsOpen = document.getElementById("details-panel").classList.contains("open");
+    var plotRight = Math.max(plotLeft + 160, w - (detailsOpen ? 430 : 80));
+    var plotTop = 195;
+    var plotBottom = Math.max(plotTop + 120, groundTop - 35);
+    var plotWidth = plotRight - plotLeft;
+    var plotHeight = plotBottom - plotTop;
+    function xAt(index) { return plotLeft + cumulative[index] / totalNm * plotWidth; }
+    function yAt(altitude) { return plotBottom - altitude / maxAltitude * plotHeight; }
+
+    var statusColor = activeSectionFlight.status === "confirmed" ? "#2ed47a" : "#f5a623";
+    var markup = "";
+    for (var level = 0; level <= 4; level++) {
+      var altitude = maxAltitude * level / 4;
+      var y = yAt(altitude);
+      markup += '<line x1="' + plotLeft + '" y1="' + y + '" x2="' + plotRight + '" y2="' + y +
+        '" stroke="#bfc8ce" stroke-width="1" stroke-dasharray="4 5"></line>';
+      markup += '<text x="' + (plotLeft - 12) + '" y="' + (y + 4) + '" text-anchor="end">' +
+        Math.round(altitude).toLocaleString() + ' ft</text>';
+    }
+
+    var polyline = points.map(function (point, index) {
+      return xAt(index).toFixed(1) + "," + yAt(altitudes[index]).toFixed(1);
+    }).join(" ");
+    markup += '<polyline points="' + polyline + '" fill="none" stroke="' + statusColor +
+      '" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"></polyline>';
+
+    var last = points.length - 1;
+    markup += '<circle cx="' + xAt(last) + '" cy="' + yAt(altitudes[last]) +
+      '" r="7" fill="' + statusColor + '" stroke="#ffffff" stroke-width="2"></circle>';
+    markup += '<text x="' + plotLeft + '" y="' + (plotTop - 15) + '" font-size="16" font-weight="700">' +
+      escapeSectionText(activeSectionFlight.callsign || activeSectionFlight.icao24.toUpperCase()) +
+      ' &middot; observed altitude profile</text>';
+    markup += '<text x="' + ((plotLeft + plotRight) / 2) + '" y="' + (plotBottom + 26) +
+      '" text-anchor="middle">Cumulative distance traveled: ' + totalNm.toFixed(1) + ' NM</text>';
+    return markup;
+  }
+
+  window.setActiveSectionFlight = function (flight) {
+    activeSectionFlight = flight || null;
+    draw();
+  };
+
   // ----- Draw the scene -----
   function draw() {
     var w = window.innerWidth;
@@ -538,14 +692,13 @@
       var hasData = !!csvData[r.id];
       // A route is drawn if it is manually selected, or (in station mode) it has data
       if (!selectedRoutes[r.id] && !(stationMode && hasData)) return;
-      var y = r.type === "plane"
-        ? groundTop * PlaneSlots[r.slot]
-        : groundTop + groundHeight * SubwaySlots[r.slot];
+      var y = groundTop + groundHeight * SubwaySlots[r.slot];
       out += (stationMode && hasData)
         ? renderStationRoute(r, y, csvData[r.id])
         : renderPlainLine(r, y, w);
     });
     routeLines.innerHTML = out;
+    flightProfile.innerHTML = renderFlightAltitudeProfile(w, groundTop);
   }
 
   window.addEventListener("resize", draw);
@@ -587,10 +740,13 @@
       center: [MapCenter[1], MapCenter[0]],   // MapLibre wants [lon, lat]
       zoom: MapZoom
     });
+    planMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+    planMap.addControl(new maplibregl.ScaleControl({ unit: "nautical" }), "bottom-right");
     planMap.on("load", function () {
       planMapReady = true;
       syncAllRouteLayers();     // apply any route selections made before the map existed
       initTrainsLayer();
+      document.dispatchEvent(new CustomEvent("platform:plan-map-ready"));
     });
   }
 
@@ -702,10 +858,8 @@
   // ==============================================================
 
   // ===================== 3D View (independent map) =====================
-  // This map is created only when 3D View is first opened. Plan View keeps
-  // its existing raster basemap and camera behavior.
-  var ThreeDStyleUrl = "https://tiles.openfreemap.org/styles/liberty";
-  var ThreeDDarkenAmount = 0.55;   // opacity of the dark scrim over the basemap (0 = untouched, 1 = black)
+  // The 3D map deliberately uses the exact CARTO Light raster basemap as Plan View.
+  // Terrain and neutral building extrusions add geometry without changing the map colors.
   var threeDMap = null;
   var threeDMapReady = false;
   var threeDRouteLayerOnById = {};
@@ -720,7 +874,13 @@
     if (threeDMap) return;
     threeDMap = new maplibregl.Map({
       container: "threeDMap",
-      style: ThreeDStyleUrl,
+      style: {
+        version: 8,
+        sources: {
+          basemap: { type: "raster", tiles: MapTileUrls, tileSize: 256, attribution: MapAttribution }
+        },
+        layers: [{ id: "basemap", type: "raster", source: "basemap" }]
+      },
       center: ThreeDInitialCamera.center,
       zoom: ThreeDInitialCamera.zoom,
       pitch: ThreeDInitialCamera.pitch,
@@ -738,14 +898,14 @@
     threeDMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
     threeDMap.addControl(new maplibregl.FullscreenControl({ container: threeDViewEl }), "top-right");
     threeDMap.on("load", function () {
-      var layers = threeDMap.getStyle().layers || [];
-      var labelLayerId;
-      for (var i = 0; i < layers.length; i++) {
-        if (layers[i].type === "symbol" && layers[i].layout && layers[i].layout["text-field"]) {
-          labelLayerId = layers[i].id;
-          break;
-        }
+      if (!threeDMap.getSource("terrain-dem")) {
+        threeDMap.addSource("terrain-dem", {
+          type: "raster-dem",
+          url: "https://tiles.mapterhorn.com/tilejson.json",
+          tileSize: 256
+        });
       }
+      threeDMap.setTerrain({ source: "terrain-dem", exaggeration: 1 });
       if (!threeDMap.getSource("three-d-buildings-source")) {
         threeDMap.addSource("three-d-buildings-source", {
           type: "vector",
@@ -762,25 +922,18 @@
         paint: {
           "fill-extrusion-color": [
             "interpolate", ["linear"], ["coalesce", ["get", "render_height"], 0],
-            0, "#d9e4df", 120, "#9abdaf", 300, "#5f8f7d"
+            0, "#ecece7", 120, "#d4d4cc", 300, "#b8b8ae"
           ],
           "fill-extrusion-height": ["coalesce", ["get", "render_height"], 0],
           "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
           "fill-extrusion-opacity": 0.88
         }
-      }, labelLayerId);
-      // Dark scrim: a full-canvas semi-transparent layer added here (after the basemap +
-      // buildings, before the route/train/spindle layers below) darkens only the map itself --
-      // anything added after this point still renders at full brightness on top of it.
-      threeDMap.addLayer({
-        id: "dark-scrim",
-        type: "background",
-        paint: { "background-color": NA, "background-opacity": ThreeDDarkenAmount }
       });
       threeDMapReady = true;
       syncAllThreeDRouteLayers();
       initThreeDTrainsLayer();
       loadSpindleData();
+      document.dispatchEvent(new CustomEvent("platform:three-d-map-ready"));
     });
   }
 
@@ -872,6 +1025,7 @@
                                         // (only routes that were selected at fetch time have data)
   var MinRefreshIntervalMs = 10000;    // never actually fetch more than once every 10s
   var lastRefreshAt = 0;
+  var lastTrainSourceUpdateAt = 0;
   var pendingRefreshTimeout = null;
 
   var trainStopsPromise = null;   // cached so both train-dot placement and the Signal Spindle
@@ -1018,12 +1172,10 @@
     return { type: "FeatureCollection", features: features };
   }
 
-  // Only fetches feeds that carry at least one currently-selected route -- an unselected
-  // route's trains simply never get requested, let alone shown.
+  // Always poll the two supported feeds so the summary stays live even when a route is hidden.
+  // Route selection controls rendering, not whether the shared realtime feed is refreshed.
   function activeFeedKeys() {
-    return Object.keys(TrainFeeds).filter(function (k) {
-      return TrainRouteFilter[k].some(function (routeId) { return selectedRoutes[routeId]; });
-    });
+    return Object.keys(TrainFeeds);
   }
 
   function refreshTrains() {
@@ -1033,13 +1185,16 @@
     loadTrainStops().then(function () {
       return Promise.allSettled(feedKeys.map(function (k) { return fetchTrainFeed(TrainFeeds[k]); }));
     }).then(function (results) {
+      var receivedAnyFeed = false;
       results.forEach(function (r, i) {
         if (r.status !== "fulfilled") return;
+        receivedAnyFeed = true;
         var trains = extractTrains(r.value, TrainRouteFilter[feedKeys[i]]);
         TrainRouteFilter[feedKeys[i]].forEach(function (routeId) {
           lastFetchedTrainsByRoute[routeId] = trains.filter(function (t) { return t.routeId === routeId; });
         });
       });
+      if (receivedAnyFeed) lastTrainSourceUpdateAt = Date.now();
       renderTrains();
     }).catch(function () { /* feed(s) unavailable this cycle */ });
   }
@@ -1049,14 +1204,24 @@
   // deselecting a route hides its trains right away instead of waiting for the next poll.
   function renderTrains() {
     var trains = [];
+    var allTrains = [];
     Object.keys(lastFetchedTrainsByRoute).forEach(function (routeId) {
+      allTrains = allTrains.concat(lastFetchedTrainsByRoute[routeId]);
       if (selectedRoutes[routeId]) trains = trains.concat(lastFetchedTrainsByRoute[routeId]);
     });
     var geojson = trainsToGeoJSON(trains);
+    var allGeojson = trainsToGeoJSON(allTrains);
     var source = planMap && planMap.getSource("live-trains");
     if (source) source.setData(geojson);
     var threeDSource = threeDMap && threeDMap.getSource("three-d-live-trains");
     if (threeDSource) threeDSource.setData(geojson);
+    document.dispatchEvent(new CustomEvent("platform:subways-updated", {
+      detail: {
+        count: allGeojson.features.length,
+        visibleRoutes: Object.keys(TrainColors).filter(function (routeId) { return selectedRoutes[routeId]; }),
+        updatedAt: lastTrainSourceUpdateAt
+      }
+    }));
 
     // Keep the spindle glued to whichever train it was opened for, if that train is still
     // showing: re-anchor it to the train's latest rendered position. If the train has
@@ -1381,42 +1546,42 @@
   }
   // ======================================================================
 
-  btnPlanView.addEventListener("click", function () {
-    sectionView.style.display = "none";
-    threeDViewEl.style.display = "none";
-    planViewEl.style.display = "block";
-    btnPlanView.style.display = "none";
-    btnThreeDView.style.display = "inline-block";
-    btnSectionView.style.display = "inline-block";
-    initPlanMap();
-    setTimeout(function () { if (planMap) planMap.resize(); }, 0);
-  });
+  function setViewMode(mode) {
+    sectionView.style.display = mode === "section" ? "block" : "none";
+    planViewEl.style.display = mode === "plan" ? "block" : "none";
+    threeDViewEl.style.display = mode === "3d" ? "block" : "none";
+    legend.style.visibility = mode === "section" ? "visible" : "hidden";
+    document.body.setAttribute("data-view-mode", mode);
 
-  btnThreeDView.addEventListener("click", function () {
-    sectionView.style.display = "none";
-    planViewEl.style.display = "none";
-    threeDViewEl.style.display = "block";
-    btnThreeDView.style.display = "none";
-    btnPlanView.style.display = "inline-block";
-    btnSectionView.style.display = "inline-block";
-    initThreeDMap();
-    setTimeout(function () { if (threeDMap) threeDMap.resize(); }, 0);
-  });
+    [[btnPlanView, "plan"], [btnThreeDView, "3d"], [btnSectionView, "section"]].forEach(function (entry) {
+      var active = entry[1] === mode;
+      entry[0].classList.toggle("active", active);
+      entry[0].setAttribute("aria-pressed", String(active));
+    });
 
-  btnSectionView.addEventListener("click", function () {
-    planViewEl.style.display = "none";
-    threeDViewEl.style.display = "none";
-    sectionView.style.display = "block";
-    btnSectionView.style.display = "none";
-    btnPlanView.style.display = "inline-block";
-    btnThreeDView.style.display = "inline-block";
-    draw();
-  });
+    if (mode === "plan") {
+      initPlanMap();
+      setTimeout(function () { if (planMap) planMap.resize(); }, 0);
+    } else if (mode === "3d") {
+      initThreeDMap();
+      setTimeout(function () { if (threeDMap) threeDMap.resize(); }, 0);
+    } else {
+      draw();
+    }
+    document.dispatchEvent(new CustomEvent("platform:view-changed", { detail: { mode: mode } }));
+  }
+
+  btnPlanView.addEventListener("click", function () { setViewMode("plan"); });
+  btnThreeDView.addEventListener("click", function () { setViewMode("3d"); });
+  btnSectionView.addEventListener("click", function () { setViewMode("section"); });
 
   window.addEventListener("resize", function () {
     if (planMap) planMap.resize();
     if (threeDMap) threeDMap.resize();
   });
+
+  setViewMode("plan");
 </script>
+<script src="assets/js/integrated-flight-tracker.js"></script>
 </body>
 </html>

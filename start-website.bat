@@ -1,27 +1,39 @@
 @echo off
-rem ============================================================
-rem  Double-click this file to view the Platform_Signal website.
-rem  It starts a local web server and opens your browser.
-rem  Keep the black server window open while using the site;
-rem  close that window when you are done to stop the server.
-rem ============================================================
-
+setlocal
 cd /d "%~dp0"
+set "PYTHONDONTWRITEBYTECODE=1"
 
-echo Starting a local server for Platform_Signal...
-echo (The first run may take a minute while it downloads "serve".)
+set "PYTHON_COMMAND="
+where py >nul 2>nul
+if not errorlevel 1 set "PYTHON_COMMAND=py -3"
+if not defined PYTHON_COMMAND (
+  where python >nul 2>nul
+  if not errorlevel 1 set "PYTHON_COMMAND=python"
+)
+
+if not defined PYTHON_COMMAND (
+  echo Python was not found.
+  echo Install Python 3.10 or newer, then open a new terminal and run this launcher again.
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -Command "if (Get-NetFirewallRule -DisplayName 'Platform Signal Local Website' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>nul
+if errorlevel 1 (
+  echo LAN firewall access is not configured yet.
+  echo Before using another computer, double-click setup-lan-access.bat and approve the Administrator prompt.
+  echo.
+)
+
+echo Starting the integrated Platform Signal website...
+echo This window must remain open while the website is in use.
 echo.
+%PYTHON_COMMAND% "Flight_Data\realtime-flight-tracker\server.py" --host 0.0.0.0 --port 8000 --open-browser
 
-start "Platform_Signal server" cmd /k "npx --yes serve -l 4173 ."
+if errorlevel 1 (
+  echo.
+  echo The integrated server stopped with an error.
+  pause
+)
 
-echo Waiting for the server to start...
-timeout /t 5 /nobreak >nul
-
-start "" http://localhost:4173
-
-echo.
-echo Your browser should now open at http://localhost:4173
-echo If the page looks empty, wait a few seconds and refresh it.
-echo.
-echo You can close THIS window now. Keep the OTHER server window open.
-timeout /t 8 /nobreak >nul
+endlocal

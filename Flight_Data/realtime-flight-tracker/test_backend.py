@@ -69,6 +69,7 @@ class FlightTrackerTests(unittest.TestCase):
         self.assertEqual(flight["direction"], "arrival")
         self.assertEqual(flight["current"]["phase"], "final_approach")
         self.assertEqual(flight["current"]["frequency_mhz"], 118.7)
+        self.assertAlmostEqual(flight["track"][-1]["altitude_ft"], 2500, delta=1)
 
     def test_departure_becomes_confirmed_after_initial_zone(self) -> None:
         points = [

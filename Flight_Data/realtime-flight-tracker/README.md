@@ -1,13 +1,13 @@
 # Realtime Flight Tracker: LaGuardia Arrivals and Departures
 
-**Status: working local prototype.** The tracker uses one centralized Python backend to authenticate with OpenSky, poll state vectors every 30 seconds, retain one hour of observations, and serve a MapLibre Plan/3D web interface.
+**Status: integrated local/LAN prototype.** The tracker uses one centralized Python backend to authenticate with OpenSky, poll state vectors every 30 seconds, retain one hour of observations, and serve the original Platform Signal interface with Plan, 3D, and Section modes.
 
 The airport relationship, flight phase, and frequency are inferred by transparent prototype rules. They are not an official airport manifest, flight plan, or record of live ATC handoffs.
 
 ## Confirmed implementation settings
 
 - Free public map and terrain tile sources.
-- One MapLibre map with a Plan/3D toggle and the same color style in both modes.
+- Plan and 3D maps use the original CARTO Light Plan View tiles and colors.
 - OpenFreeMap building-height data and a public raster-DEM terrain source.
 - `../DC8_AFRC_AIR_0824.glb` as the shared visualization model for aircraft.
 - One-hour rolling trails, capped by observation age.
@@ -34,9 +34,10 @@ Python backend (server.py)
        |
        | local /api/flights, read every 5 seconds
        v
-MapLibre + deck.gl browser UI
-  - Plan/3D modes share one basemap style
-  - aircraft, routes, terrain, and buildings
+Original Platform Signal browser UI
+  - Plan/3D modes share the original CARTO Light basemap style
+  - Section mode preserves subway signal routes and adds selected-flight altitude profiles
+  - L/6 trains, aircraft, routes, terrain, and buildings
   - click-only details table
 ```
 
@@ -44,7 +45,7 @@ The browser never receives the OpenSky client secret. Multiple browser windows s
 
 ### Credential safety
 
-Do not commit a replacement OpenSky secret to Git. This repository currently has `Flight_Data/credentials.json` in Git's tracked-file list, so adding it to `.gitignore` alone will not protect a newly saved secret. Before storing a new API client secret, remove the credential file from Git tracking in a deliberate security cleanup and rotate any credential that may have been shared.
+Do not commit a replacement OpenSky secret to Git. `Flight_Data/credentials.json` is ignored and is not served by the local web server. The server uses an explicit public-file allowlist, so LAN clients cannot request the credential file or other project internals.
 
 ## Run locally
 
@@ -55,17 +56,17 @@ Requirements:
 - `../credentials.json` containing the OpenSky `clientId` and `clientSecret`.
 - A WebGL2-capable browser for the deck.gl aircraft and routes.
 
-On Windows, double-click:
+From the repository root on Windows, double-click:
 
 ```text
-start-tracker.bat
+start-website.bat
 ```
 
 Or run:
 
 ```powershell
-cd Flight_Data/realtime-flight-tracker
-python server.py
+cd "D:\Cornell\Summer_Semester\Final Platform\Platform_Signal"
+py -3 Flight_Data\realtime-flight-tracker\server.py --host 0.0.0.0 --port 8000 --open-browser
 ```
 
 Then open:
@@ -77,10 +78,20 @@ http://127.0.0.1:8000
 To inspect the UI without contacting OpenSky:
 
 ```powershell
-python server.py --no-poll
+py -3 Flight_Data\realtime-flight-tracker\server.py --no-poll
 ```
 
 Stop the server with `Ctrl+C`.
+
+### Trusted private LAN access
+
+Double-click `setup-lan-access.bat` once and approve the Windows Administrator prompt. It runs `setup-lan-access.ps1` to create an inbound Windows Firewall rule for TCP port 8000 that applies only to Private network profiles and the local subnet. Start the website with `start-website.bat`, then open the printed LAN URL from the second computer, for example:
+
+```text
+http://192.168.1.45:8000
+```
+
+Only the hosting laptop needs Python and OpenSky credentials. Keep that laptop awake, online, and running the server. Double-click `remove-lan-access.bat` and approve the Administrator prompt to remove the rule later.
 
 If the status shows `OpenSky rejected the API client ID or secret (HTTP 401)`, create or regenerate an API Client from the OpenSky account page and replace the local `clientId` and `clientSecret`. Website username/password credentials are not accepted by the current REST API OAuth flow.
 
@@ -204,21 +215,22 @@ No frequency beyond 40 NM is inferred in this version.
 
 ## Plan and 3D display
 
-Plan and 3D are camera modes of the same MapLibre instance. They share the same OpenFreeMap style, labels, colors, selected flight, and map position.
+Plan and 3D use independent MapLibre instances so the original subway and signal behavior remains intact. Both use the exact same original CARTO Light raster tiles and colors, and the selected flights/filters are synchronized.
 
 | Feature | Plan | 3D |
 |---|---|---|
 | Camera pitch | 0 degrees | 60 degrees |
-| Basemap colors | Shared | Shared |
+| Basemap colors | Original CARTO Light | Original CARTO Light |
 | Terrain | Hidden | Public raster-DEM terrain |
 | Buildings | Hidden | OpenStreetMap height extrusions at close zoom |
 | Aircraft/trails | Altitude-aware, top-down | Altitude-aware perspective |
 
 The supplied DC-8 model is reused as a generic aircraft visualization; it does not assert the actual aircraft type. A status-colored halo remains visible because textured glTF models cannot always be reliably recolored.
 
-Free sources:
+Free/public sources:
 
-- OpenFreeMap vector map/buildings: https://openfreemap.org/
+- CARTO Light raster basemap: https://carto.com/basemaps/
+- OpenFreeMap building-height data: https://openfreemap.org/
 - MapLibre terrain example/source pattern: https://maplibre.org/maplibre-gl-js/docs/examples/3d-terrain/
 - MapLibre 3D buildings pattern: https://maplibre.org/maplibre-gl-js/docs/examples/display-buildings-in-3d/
 
