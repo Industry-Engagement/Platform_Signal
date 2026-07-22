@@ -120,24 +120,7 @@
     flex: 0 0 auto;
   }
 
-  /* Source buttons */
-  .source-btn {
-    width: fit-content;
-    font-weight: bold;
-    font-size: 20px;
-    padding: 4px 8px;
-    margin-bottom: 4px;
-    cursor: pointer;
-    user-select: none;
-    background: var(--white, #ffffff);
-    color: var(--subway-l, #737373);
-  }
-  .source-btn.selected {
-    background: var(--theme1-li, #cfeadf);
-    color: var(--na, #000000);
-  }
-
-  /* Legend (fixed, only shown in station mode) */
+  /* Legend for the selected subway profile */
   #section-signal-legend {
     position: fixed;
     left: 20px;
@@ -475,8 +458,6 @@
               <button class="filter-option" type="button" data-value="arrival">Arrival</button>
               <button class="filter-option" type="button" data-value="departure">Departure</button>
             </div>
-            <div class="group-label">Signal source</div>
-            <div id="source-box"></div>
             <div class="group-label">Signal tubes</div>
             <div class="filter-options" id="signal-tubes-carrier" role="group" aria-label="Signal tube carrier"></div>
           </div>
@@ -621,10 +602,9 @@
   var GroundLocation = 2 / 3;    // retained as the flight-chart layout reference; no ground is drawn
 
   // Route lines drawn when a route button is selected
-  var RouteLineWidth = 5;        // route line thickness (normal)
-  var RouteLineWidthThin = 2;    // route line thickness while "Internet Connection" is on
+  var SubwayProfileLineWidth = 2; // selected subway profile line thickness
   var RouteLineEnd = 0.868;      // right end, as a fraction of window width
-                                 // (left end is always LeftMargin, shared with station mode)
+                                 // (left end is always LeftMargin, shared with the selected profile)
   var SubwaySlots = [0.28, 0.75];// subway line depth, as a fraction of the ground
 
   // ===================== Subway appearance ==========================
@@ -683,7 +663,7 @@
   var RouteDimOpacity = 0.5;
   // =================================================================
 
-  // Station mode (shown while "Internet Connection" is selected)
+  // Station/profile layout for the selected subway route
   var LeftMargin = 140;          // px gap from the left screen edge to the first station
   var RightPadding = 140;        // px kept to the right of the last station
   var StationSpacing = 150;      // px between stations (equidistant for now)
@@ -698,10 +678,6 @@
   ];
   var selectedRoutes = { L: true, "6": true };  // both supported subway routes start visible
   var csvData = {};         // route id -> { order, stations, tracks }
-  var stationMode = false;  // true while "Internet Connection" is selected
-
-  var sources = ["Internet Connection", "Radio Frequency"];
-
   // Station display names (positional: L01 = 1st station, and so on)
   var StationNames = {
     L01: "8 Av",
@@ -846,19 +822,29 @@
     return b;
   }
 
-  // Focusing a line: highlight its button, force the data source to Internet Connection,
-  // rebuild the station dot row, redraw Section View, and highlight it on Plan/3D.
+  // Focusing a line highlights it, shows its signal tube, rebuilds the station dot row,
+  // redraws Section View, and highlights it on Plan/3D.
   function setActiveRoute(routeId) {
     activeRouteId = routeId;
     subwayCameraSelectionVersion += 1;
     Object.keys(subwayRouteButtons).forEach(function (id) {
       subwayRouteButtons[id].classList.toggle("active-flight", id === activeRouteId);
     });
+    var signalPromise;
     if (activeRouteId) {
-      setSource("Internet Connection");
+      signalPromise = activateSubwayRouteSignal(activeRouteId);
       // The Section View carrier band needs this; load it here rather than as a side effect
       // of the dot row, which may not be present. It re-draws once resolved.
       loadSubwaySignalJson();
+    } else {
+      var selectedFeature = selectedTrainTripId ? displayTrainFeature(selectedTrainTripId) : null;
+      signalPromise = selectedFeature
+        ? activateSubwayTrainSignal(
+            selectedFeature.properties.route,
+            selectedFeature.properties.tripId,
+            selectedFeature.geometry.coordinates
+          )
+        : Promise.resolve(clearActiveSubwaySignal());
     }
     renderStationDotRow();
     draw();
@@ -866,6 +852,7 @@
     if (selectedSubwayCameraRouteId()) {
       window.setTimeout(function () { focusSelectedSubwayRoute(currentMapViewMode()); }, 0);
     }
+    return signalPromise;
   }
 
   // ---- Shared data loads for the focused line ----
@@ -997,36 +984,6 @@
   routes.forEach(function (r) {
     var row = document.getElementById(r.type === "subway" ? "row-subways" : "row-planes");
     row.appendChild(makeRouteButton(r));
-  });
-
-  // ----- Build source buttons -----
-  var sourceBox = document.getElementById("source-box");
-  var sourceButtons = {};   // label -> element
-
-  // Selects a source option (pass null to clear all). Broken out of the click handler so
-  // focusing a subway route can force "Internet Connection" on -- see setActiveRoute.
-  function setSource(label) {
-    Array.prototype.forEach.call(sourceBox.children, function (el) {
-      el.classList.remove("selected");
-    });
-    if (label && sourceButtons[label]) sourceButtons[label].classList.add("selected");
-    // Station mode is on only when "Internet Connection" is the selected option
-    stationMode = label === "Internet Connection";
-    legend.classList.remove("on");
-    draw();
-    if (!stationMode) { activeSpindleTripId = null; activeSpindleRouteId = null; activeSpindleLonLat = null; clearSpindleSegment(); }   // leaving Internet Connection hides any shown spindle segment
-  }
-
-  sources.forEach(function (label) {
-    var b = document.createElement("div");
-    b.className = "source-btn";
-    b.textContent = label;
-    sourceButtons[label] = b;
-    b.addEventListener("click", function () {
-      // Single-select, and clicking the selected option clears it
-      setSource(b.classList.contains("selected") ? null : label);
-    });
-    sourceBox.appendChild(b);
   });
 
   // ----- Collapse / expand a panel by clicking its header -----
@@ -1225,11 +1182,10 @@
 
   // A selected route in plain mode: a single colored line
   function renderPlainLine(r, y, w) {
-    return hline(LeftMargin, y, w * RouteLineEnd, r.color,
-                 stationMode ? RouteLineWidthThin : RouteLineWidth);
+    return hline(LeftMargin, y, w * RouteLineEnd, r.color, SubwayProfileLineWidth);
   }
 
-  // A selected route in station mode. Draw order controls layering:
+  // A selected route with station data. Draw order controls layering:
   // signal squares first (underneath), then the line, then dots + labels (on top).
   function renderStationRoute(r, y, data) {
     var N = data.order.length;
@@ -1273,8 +1229,7 @@
       }
     }
 
-    var line = hline(stationX(0), y, stationX(N - 1), r.color,
-                     stationMode ? RouteLineWidthThin : RouteLineWidth);
+    var line = hline(stationX(0), y, stationX(N - 1), r.color, SubwayProfileLineWidth);
     return squares + line + marks;
   }
 
@@ -2524,7 +2479,7 @@
       syncAllRouteLayers();     // apply any route selections made before the map existed
       syncActiveRouteHighlight();   // and any line focused before the map existed
       initTrainsLayer();
-      loadSpindleData();        // idempotent -- also called from 3D View's load handler, whichever runs first wins
+      loadSpindleData().then(rebuildActiveSpindleForZoom).catch(function () { /* signal data unavailable */ });
       applyBasemapHidden(planMap, "plan");   // picks up "Hide map" if it was toggled before this map existed
       document.dispatchEvent(new CustomEvent("platform:plan-map-ready"));
       focusSelectedSubwayRoute("plan");
@@ -2813,7 +2768,7 @@
       threeDMapReady = true;
       syncAllThreeDRouteLayers();
       initThreeDTrainsLayer();
-      loadSpindleData();
+      loadSpindleData().then(rebuildActiveSpindleForZoom).catch(function () { /* signal data unavailable */ });
       applyBasemapHidden(threeDMap, "3d");   // picks up "Hide map" if it was toggled before this map existed
       document.dispatchEvent(new CustomEvent("platform:three-d-map-ready"));
       focusSelectedSubwayRoute("3d");
@@ -3082,7 +3037,7 @@
       "Position is drawn from the MTA GTFS-Realtime feed, refreshed every 15s.";
   }
 
-  function selectTrain(p) {
+  function selectTrain(p, lonLat) {
     selectedTrainTripId = p.tripId;
     var previousRouteId = selectedTrainRouteId;
     selectedTrainRouteId = p.route;
@@ -3097,11 +3052,14 @@
     setRouteHighlighted(selectedTrainRouteId, true);
     syncPlanRouteFocusStyles();
     renderTrains();   // refresh the highlighted-dot state immediately
+    var signalPromise = activateSubwayTrainSignal(p.route, p.tripId, lonLat);
     window.setTimeout(function () { focusSelectedSubwayRoute(currentMapViewMode()); }, 0);
+    return signalPromise;
   }
 
   function closeTrainDetails() {
     if (!selectedTrainTripId) return;
+    var closingTripId = selectedTrainTripId;
     selectedTrainTripId = null;
     if (selectedTrainRouteId) setRouteHighlighted(selectedTrainRouteId, false);
     selectedTrainRouteId = null;
@@ -3110,6 +3068,10 @@
     trainDetailsPanel.classList.remove("open");
     trainDetailsPanel.setAttribute("aria-hidden", "true");
     document.dispatchEvent(new CustomEvent("platform:train-deselected"));
+    if (activeSpindleTripId === closingTripId) {
+      if (activeRouteId) activateSubwayRouteSignal(activeRouteId);
+      else clearActiveSubwaySignal();
+    }
     renderTrains();
   }
 
@@ -3148,14 +3110,7 @@
     planMap.on("click", "live-trains", function (e) {
       var f = e.features[0];
       var p = f.properties;
-      selectTrain(p);
-      // Same spindle-reveal gesture as 3D View's train click -- see the
-      // "three-d-live-trains" handler below for the full explanation.
-      if (SpindleRouteIds.indexOf(p.route) !== -1 && stationMode && selectedRoutes[p.route]) {
-        activeSpindleTripId = p.tripId;
-        activeSpindleRouteId = p.route;
-        showSpindleSegment(p.route, f.geometry.coordinates);
-      }
+      selectTrain(p, f.geometry.coordinates);
     });
     bringSubwayToFront();
 
@@ -3186,16 +3141,9 @@
     threeDMap.on("click", "three-d-live-trains", function (e) {
       var f = e.features[0];
       var p = f.properties;
-      selectTrain(p);
-      // Clicking a train on a route with spindle data (see SpindleRouteIds below), while that
-      // route + Internet Connection are both selected, reveals the signal spindle for just the
-      // 500m on either side of that train. Tracked by tripId + route so refreshTrains() can
-      // keep the spindle glued to this same train as it moves on each poll.
-      if (SpindleRouteIds.indexOf(p.route) !== -1 && stationMode && selectedRoutes[p.route]) {
-        activeSpindleTripId = p.tripId;
-        activeSpindleRouteId = p.route;
-        showSpindleSegment(p.route, f.geometry.coordinates);
-      }
+      // Selection always reveals the signal tube around this train. The active trip id keeps
+      // the tube glued to the train as refreshTrains() receives new positions.
+      selectTrain(p, f.geometry.coordinates);
     });
     bringSubwayToFront();
     ensureTrainPolling();
@@ -3428,10 +3376,9 @@
   }
   // ======================================================================
 
-  // ===================== Signal Spindle (3D View only) =====================
-  // Clicking a train on a route listed in SpindleRouteIds (while that route + Internet
-  // Connection are both selected -- see the "three-d-live-trains" click handler above)
-  // reveals a tube draped along that route's real path, covering just SpindleWindowM on
+  // ===================== Subway Signal Spindle =====================
+  // Selecting a supported route reveals its whole signal tube. Selecting a train reveals
+  // the tube around that train, covering just SpindleWindowM on
   // either side of that train. Radius at each cross-section tracks normalized signal
   // strength directly (no tapering envelope), so the cut ends of the window are flat/open
   // rather than pinching to a point. Data: Source/Subway_Signal_Strength/subway-web-100.min.json.
@@ -3447,7 +3394,7 @@
   // that, a naive concatenation of RouteShape/NYCSubways/Subway_6.geojson's raw segments (which
   // turned out to encode 6 as hundreds of disconnected/branching fragments with no reliable
   // order at all).
-  var SpindleRouteIds = ["L", "6"];   // which routes get the click-to-reveal spindle feature
+  var SpindleRouteIds = ["L", "6"];   // routes with selection-driven signal tubes
   // The *_3D shapes carry the same ordered lon/lat vertices as the *_official ones they were
   // built from, plus a third component: real track elevation in metres above sea level. That
   // is the same frame the spindle mesh already works in (its origin is
@@ -3629,6 +3576,52 @@
   var activeSpindleLonLat = null;    // last [lon, lat] the shown spindle was anchored to, so a zoom
                                       // change alone can rebuild it in place (see the "zoom" listeners below)
   var activeSpindleWholeRoute = false;
+  var activeSpindleSelectionVersion = 0;
+
+  function clearActiveSubwaySignal() {
+    activeSpindleSelectionVersion += 1;
+    activeSpindleTripId = null;
+    activeSpindleRouteId = null;
+    activeSpindleLonLat = null;
+    activeSpindleWholeRoute = false;
+    clearSpindleSegment();
+    return false;
+  }
+
+  function activateSubwayRouteSignal(routeId) {
+    if (SpindleRouteIds.indexOf(routeId) === -1 || !selectedRoutes[routeId]) {
+      return Promise.resolve(clearActiveSubwaySignal());
+    }
+    var version = ++activeSpindleSelectionVersion;
+    activeSpindleTripId = null;
+    activeSpindleRouteId = routeId;
+    activeSpindleLonLat = null;
+    activeSpindleWholeRoute = true;
+    clearSpindleSegment();
+    return loadSpindleData().then(function (data) {
+      if (!data || version !== activeSpindleSelectionVersion || activeSpindleRouteId !== routeId ||
+          !activeSpindleWholeRoute) return false;
+      return showSpindleRoute(routeId);
+    }).catch(function () { return false; });
+  }
+
+  function activateSubwayTrainSignal(routeId, tripId, lonLat) {
+    if (SpindleRouteIds.indexOf(routeId) === -1 || !selectedRoutes[routeId] || !lonLat) {
+      return Promise.resolve(clearActiveSubwaySignal());
+    }
+    var version = ++activeSpindleSelectionVersion;
+    activeSpindleTripId = tripId;
+    activeSpindleRouteId = routeId;
+    activeSpindleLonLat = lonLat.slice(0, 2);
+    activeSpindleWholeRoute = false;
+    clearSpindleSegment();
+    return loadSpindleData().then(function (data) {
+      if (!data || version !== activeSpindleSelectionVersion || activeSpindleTripId !== tripId) return false;
+      var latest = displayTrainFeature(tripId);
+      var position = latest ? latest.geometry.coordinates : activeSpindleLonLat;
+      return showSpindleSegment(routeId, position);
+    }).catch(function () { return false; });
+  }
 
   function loadSpindleData() {
     if (spindleDataPromise) return spindleDataPromise;
@@ -4041,18 +4034,12 @@
         var routeId = targetId;
         if (SpindleRouteIds.indexOf(routeId) === -1 || !selectedRoutes[routeId]) return false;
         if (selectedTrainTripId) closeTrainDetails();
-        setActiveRoute(routeId);
+        var routeSignalPromise = setActiveRoute(routeId);
         displaySpindleTripId = null;
         displaySpindleRouteId = routeId;
         displaySpindleReadyRouteId = null;
-        activeSpindleTripId = null;
-        activeSpindleRouteId = routeId;
-        activeSpindleLonLat = null;
-        activeSpindleWholeRoute = true;
-        clearSpindleSegment();
-        loadSpindleData().then(function (data) {
-          if (!data || displaySpindleRouteId !== routeId) return;
-          if (showSpindleRoute(routeId)) displaySpindleReadyRouteId = routeId;
+        routeSignalPromise.then(function (shown) {
+          if (shown && displaySpindleRouteId === routeId) displaySpindleReadyRouteId = routeId;
         });
         return true;
       }
@@ -4061,21 +4048,10 @@
       if (!feature) return false;
       var properties = feature.properties;
       if (activeRouteId) setActiveRoute(null);
-      selectTrain(properties);
+      selectTrain(properties, feature.geometry.coordinates);
       displaySpindleTripId = properties.tripId;
       displaySpindleRouteId = null;
       displaySpindleReadyRouteId = null;
-      activeSpindleTripId = properties.tripId;
-      activeSpindleRouteId = properties.route;
-      activeSpindleLonLat = feature.geometry.coordinates.slice(0, 2);
-      activeSpindleWholeRoute = false;
-      clearSpindleSegment();
-      loadSpindleData().then(function (data) {
-        if (!data || displaySpindleTripId !== properties.tripId ||
-            activeSpindleTripId !== properties.tripId) return;
-        var latest = displayTrainFeature(properties.tripId);
-        if (latest) showSpindleSegment(properties.route, latest.geometry.coordinates);
-      });
       return true;
     },
     getCameraTarget: function (routeId, kind, map) {
@@ -4108,16 +4084,8 @@
     },
     clearDisplaySignal: function () {
       if (!displaySpindleTripId && !displaySpindleRouteId) return;
-      var ownsTrainSignal = displaySpindleTripId && activeSpindleTripId === displaySpindleTripId;
-      var ownsRouteSignal = displaySpindleRouteId && activeSpindleWholeRoute &&
-        activeSpindleRouteId === displaySpindleRouteId;
-      if (ownsTrainSignal || ownsRouteSignal) {
-        activeSpindleTripId = null;
-        activeSpindleRouteId = null;
-        activeSpindleLonLat = null;
-        activeSpindleWholeRoute = false;
-        clearSpindleSegment();
-      }
+      if (displaySpindleTripId && selectedTrainTripId === displaySpindleTripId) closeTrainDetails();
+      if (displaySpindleRouteId && activeRouteId === displaySpindleRouteId) setActiveRoute(null);
       displaySpindleTripId = null;
       displaySpindleRouteId = null;
       displaySpindleReadyRouteId = null;

@@ -246,22 +246,6 @@ button { font: inherit; }
   background: var(--interface-text);
   font-weight: 700;
 }
-#controls .source-btn {
-  display: inline-block;
-  width: auto;
-  margin: 0 6px 3px 0;
-  padding: 6px 9px;
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  color: var(--interface-muted);
-  background: rgba(255, 255, 255, 0.05);
-  font-size: 11px;
-}
-#controls .source-btn.selected {
-  color: #07111c;
-  background: var(--interface-text);
-}
-
 .map-summary,
 .map-legend,
 .details-panel,
