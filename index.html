@@ -557,12 +557,14 @@
   <div id="threeDView">
     <div id="threeDMap"></div>
     <div id="threeD-camera-tools" aria-label="3D camera controls">
-      <button type="button" data-camera-preset="top">Top</button>
-      <button type="button" data-camera-preset="oblique">Oblique</button>
-      <button type="button" data-camera-preset="side">Side</button>
-      <button type="button" data-camera-preset="city">Full City</button>
-      <button type="button" data-camera-preset="reset">Reset</button>
+      <button class="camera-preset-control" type="button" data-camera-preset="top">Top</button>
+      <button class="camera-preset-control" type="button" data-camera-preset="oblique">Oblique</button>
+      <button class="camera-preset-control" type="button" data-camera-preset="side">Side</button>
+      <button class="camera-preset-control" type="button" data-camera-preset="city">Full City</button>
+      <button class="camera-preset-control" type="button" data-camera-preset="reset">Reset</button>
       <div id="threeD-camera-hint">Drag to move · right-drag to rotate/tilt · scroll to zoom/raise camera</div>
+      <button id="display-mode-toggle" type="button" aria-pressed="false"
+              title="Turn fullscreen Display Mode on">Display</button>
     </div>
   </div>
 
@@ -2900,6 +2902,7 @@
   function focusSelectedSubwayRoute(mode, force) {
     var routeId = selectedSubwayCameraRouteId();
     if (!routeId || (mode !== "plan" && mode !== "3d")) return false;
+    if (mode === "3d" && window.PlatformDisplayMode && window.PlatformDisplayMode.isActive()) return true;
     if (!force && subwayCameraFocusedVersions[mode] === subwayCameraSelectionVersion) return true;
     var map = mode === "3d" ? threeDMap : planMap;
     var ready = mode === "3d" ? threeDMapReady : planMapReady;
@@ -3512,6 +3515,7 @@
   var SpindleDataByRoute = {};   // route id -> { localPts, cum, totalLen, signalByProvider, mPerDegLon, mPerDegLat }
   var spindleSignalJsonCache = null;
   var spindleDataLoading = false;
+  var spindleDataPromise = null;
 
   function spindleSignalValuesFromSegs(segs) {
     var signalValues = [];
@@ -3600,9 +3604,12 @@
                                       // change alone can rebuild it in place (see the "zoom" listeners below)
 
   function loadSpindleData() {
-    if (spindleDataLoading || Object.keys(SpindleDataByRoute).length) return;
+    if (spindleDataPromise) return spindleDataPromise;
+    if (SpindleRouteIds.every(function (routeId) { return !!SpindleDataByRoute[routeId]; })) {
+      return Promise.resolve(SpindleDataByRoute);
+    }
     spindleDataLoading = true;
-    fetch(SpindleSignalJson).then(function (r) { return r.json(); }).then(function (signalJson) {
+    spindleDataPromise = fetch(SpindleSignalJson).then(function (r) { return r.json(); }).then(function (signalJson) {
       spindleSignalJsonCache = signalJson;
       return Promise.all(SpindleRouteIds.map(function (routeId) {
         return fetch(SpindleShapeUrls[routeId]).then(function (r) { return r.json(); }).then(function (shapeGeojson) {
@@ -3652,8 +3659,17 @@
           };
         });
       }));
-    }).catch(function (err) { console.error("Signal spindle data failed to load:", err); })
-      .then(function () { spindleDataLoading = false; });
+    }).then(function () {
+      return SpindleDataByRoute;
+    }).catch(function (err) {
+      console.error("Signal spindle data failed to load:", err);
+      spindleDataPromise = null;
+      return null;
+    }).then(function (result) {
+      spindleDataLoading = false;
+      return result;
+    });
+    return spindleDataPromise;
   }
 
   // Point (in local east/south meters) at an arbitrary distance along the path, plus its unit tangent.
@@ -3918,6 +3934,74 @@
     if (planMap && planMapReady) addThreeJsLayerToMap(planMap, originLonLat, object3d.clone(true));
     if (threeDMap && threeDMapReady) addThreeJsLayerToMap(threeDMap, originLonLat, object3d.clone(true));
   }
+
+  // Narrow bridge for fullscreen Display Mode. It reuses the same selection and
+  // spindle paths as a manual train click without replacing either interaction.
+  var displaySpindleTripId = null;
+
+  function displayTrainFeatures() {
+    var trains = [];
+    Object.keys(lastFetchedTrainsByRoute).forEach(function (routeId) {
+      if (selectedRoutes[routeId]) trains = trains.concat(lastFetchedTrainsByRoute[routeId]);
+    });
+    return trainsToGeoJSON(trains).features.filter(function (feature) {
+      return SpindleRouteIds.indexOf(feature.properties.route) !== -1;
+    });
+  }
+
+  function displayTrainFeature(tripId) {
+    return displayTrainFeatures().filter(function (feature) {
+      return feature.properties.tripId === tripId;
+    })[0] || null;
+  }
+
+  window.PlatformSubwayDisplay = {
+    getCandidates: function () {
+      return displayTrainFeatures().map(function (feature) {
+        return {
+          kind: "train",
+          id: feature.properties.tripId,
+          key: "train:" + feature.properties.tripId,
+          label: feature.properties.route + " Train"
+        };
+      });
+    },
+    select: function (tripId) {
+      var feature = displayTrainFeature(tripId);
+      if (!feature) return false;
+      var properties = feature.properties;
+      selectTrain(properties);
+      displaySpindleTripId = properties.tripId;
+      activeSpindleTripId = properties.tripId;
+      activeSpindleRouteId = properties.route;
+      activeSpindleLonLat = feature.geometry.coordinates.slice(0, 2);
+      loadSpindleData().then(function (data) {
+        if (!data || displaySpindleTripId !== properties.tripId ||
+            activeSpindleTripId !== properties.tripId) return;
+        var latest = displayTrainFeature(properties.tripId);
+        if (latest) showSpindleSegment(properties.route, latest.geometry.coordinates);
+      });
+      return true;
+    },
+    getPose: function (tripId) {
+      var feature = displayTrainFeature(tripId);
+      if (!feature) return null;
+      return {
+        center: feature.geometry.coordinates.slice(0, 2),
+        heading: Number(feature.properties.heading) || 0
+      };
+    },
+    clearDisplaySignal: function () {
+      if (!displaySpindleTripId) return;
+      if (activeSpindleTripId === displaySpindleTripId) {
+        activeSpindleTripId = null;
+        activeSpindleRouteId = null;
+        activeSpindleLonLat = null;
+        clearSpindleSegment();
+      }
+      displaySpindleTripId = null;
+    }
+  };
   // ======================================================================
 
   function setViewMode(mode) {
@@ -3971,5 +4055,6 @@
   setViewMode("plan");
 </script>
 <script src="assets/js/integrated-flight-tracker.js"></script>
+<script src="assets/js/display-mode.js"></script>
 </body>
 </html>

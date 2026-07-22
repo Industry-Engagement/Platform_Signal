@@ -910,6 +910,27 @@
     return [[bounds.west, bounds.south], [bounds.east, bounds.north]];
   }
 
+  function signalRouteOrbitBounds(points) {
+    var bounds = signalRouteBounds(points);
+    var west = bounds[0][0];
+    var south = bounds[0][1];
+    var east = bounds[1][0];
+    var north = bounds[1][1];
+    var centerLongitude = (west + east) / 2;
+    var centerLatitude = (south + north) / 2;
+    var longitudeScale = Math.max(0.2, Math.cos(centerLatitude * Math.PI / 180));
+    var halfLatitudeSpan = Math.max((north - south) / 2, 0.002);
+    var halfLongitudeSpanInLatitudeDegrees = Math.max((east - west) * longitudeScale / 2, 0.002);
+    // A square local-metre envelope enlarged by sqrt(2) contains the complete
+    // drawable route at every bearing during the 120-degree orbit.
+    var halfEnvelope = Math.max(halfLatitudeSpan, halfLongitudeSpanInLatitudeDegrees) * Math.SQRT2;
+    var halfLongitudeEnvelope = halfEnvelope / longitudeScale;
+    return [
+      [centerLongitude - halfLongitudeEnvelope, centerLatitude - halfEnvelope],
+      [centerLongitude + halfLongitudeEnvelope, centerLatitude + halfEnvelope]
+    ];
+  }
+
   function signalRouteBearing(points) {
     if (points.length < 2) return -20;
     var end = points[points.length - 1];
@@ -942,6 +963,7 @@
   function focusSelectedSignalRoute(mode, force) {
     if (mode !== "plan" && mode !== "3d") return false;
     if (!state.selectedIcao24) return false;
+    if (mode === "3d" && window.PlatformDisplayMode && window.PlatformDisplayMode.isActive()) return true;
     if (!force && state.selectedSignalFocusedVersions[mode] === state.selectedSignalSelectionVersion) {
       return true;
     }
@@ -1436,6 +1458,70 @@
 
   var existingPlanMap = window.PlanView && window.PlanView.getMap();
   if (existingPlanMap && existingPlanMap.isStyleLoaded()) attachOverlay(existingPlanMap, "plan");
+
+  // Narrow bridge for fullscreen Display Mode. Manual flight buttons and map
+  // picking continue to use selectFlight directly and remain unchanged.
+  window.PlatformFlightDisplay = {
+    getCandidates: function () {
+      return filteredFlights().filter(function (flight) {
+        if (!flight.active || !flight.current || currentSignalAvailability(flight).drawable !== true) return false;
+        var signalV2 = flight.signal_v2 || {};
+        var signalPoints = [];
+        if (signalV2.live_current || signalV2.current) signalPoints.push(signalV2.live_current || signalV2.current);
+        signalPoints = signalPoints.concat(signalV2.predicted_timeline || []);
+        return signalPoints.filter(drawableSignalPoint).length >= 2 &&
+          finiteNumber(flight.current.longitude) != null && finiteNumber(flight.current.latitude) != null;
+      }).map(function (flight) {
+        return {
+          kind: "flight",
+          id: flight.icao24,
+          key: "flight:" + flight.icao24,
+          label: flight.callsign || flight.icao24.toUpperCase()
+        };
+      });
+    },
+    select: function (icao24) {
+      if (!state.flights.some(function (flight) { return flight.icao24 === icao24; })) return false;
+      selectFlight(icao24);
+      return true;
+    },
+    getCameraTarget: function (icao24, map) {
+      if (String(state.selectedIcao24 || "").toLowerCase() !== String(icao24 || "").toLowerCase()) return null;
+      var points = drawableSelectedSignalPoints();
+      if (points.length < 2 || !map) return null;
+      var padding = signalRoutePadding(map);
+      var orbitMargin = 60;
+      return {
+        kind: "bounds",
+        bounds: signalRouteOrbitBounds(points),
+        bearing: signalRouteBearing(points),
+        padding: {
+          top: padding.top + orbitMargin,
+          right: padding.right + orbitMargin,
+          bottom: padding.bottom + orbitMargin,
+          left: padding.left + orbitMargin
+        },
+        maxZoom: 14.5,
+        ready: state.selectedSignalLoadingIcao24 !== String(icao24 || "").toLowerCase()
+      };
+    },
+    getPose: function (icao24) {
+      var flight = state.flights.find(function (item) { return item.icao24 === icao24; });
+      if (!flight || !flight.current) return null;
+      var live = flight.signal_v2 && flight.signal_v2.live_current;
+      if (live && finiteNumber(live.aircraft_lon) != null && finiteNumber(live.aircraft_lat) != null) {
+        return {
+          center: [Number(live.aircraft_lon), Number(live.aircraft_lat)],
+          heading: finiteNumber(live.heading_deg) == null ? Number(flight.current.heading_deg) || 0 : Number(live.heading_deg)
+        };
+      }
+      if (finiteNumber(flight.current.longitude) == null || finiteNumber(flight.current.latitude) == null) return null;
+      return {
+        center: [Number(flight.current.longitude), Number(flight.current.latitude)],
+        heading: Number(flight.current.heading_deg) || 0
+      };
+    }
+  };
 
   refreshFlights();
   window.setInterval(refreshFlights, 5000);

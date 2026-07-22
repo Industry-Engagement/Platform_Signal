@@ -384,13 +384,31 @@ body[data-view-mode="section"] .map-legend { display: none; }
   pointer-events: auto;
 }
 
-/* Keep the fullscreen 3D map visually clear while still allowing a selected
-   flight/train to show its shared details panel. Only the panel background is
-   60% transparent; its text and controls remain fully opaque and readable. */
-#threeDView:fullscreen #threeD-camera-tools,
+/* Display Mode occupies the normal camera-tools position only in fullscreen.
+   The camera presets return unchanged when fullscreen ends. */
+#display-mode-toggle { display: none; }
+#threeDView:fullscreen #threeD-camera-tools {
+  display: flex !important;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#threeDView:fullscreen #threeD-camera-tools [data-camera-preset],
+#threeDView:fullscreen #threeD-camera-hint,
 #threeDView:fullscreen .maplibregl-ctrl.maplibregl-ctrl-attrib {
   display: none !important;
 }
+#threeDView:fullscreen #display-mode-toggle { display: block; }
+#threeDView:fullscreen #display-mode-toggle.active {
+  border-color: #69e0ff;
+  color: #ffffff;
+  background: rgba(0, 92, 128, 0.92);
+  box-shadow: 0 0 0 2px rgba(105, 224, 255, 0.28);
+}
+
+/* Keep the fullscreen 3D map visually clear while still allowing a selected
+   flight/train to show its shared details panel. Only the panel background is
+   60% transparent; its text and controls remain fully opaque and readable. */
 #threeDView:fullscreen .details-panel.open {
   top: 18px;
   bottom: auto;
@@ -402,9 +420,23 @@ body[data-view-mode="section"] .map-legend { display: none; }
 }
 
 /* Safari still exposes the prefixed fullscreen pseudo-class on some versions. */
-#threeDView:-webkit-full-screen #threeD-camera-tools,
+#threeDView:-webkit-full-screen #threeD-camera-tools {
+  display: flex !important;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#threeDView:-webkit-full-screen #threeD-camera-tools [data-camera-preset],
+#threeDView:-webkit-full-screen #threeD-camera-hint,
 #threeDView:-webkit-full-screen .maplibregl-ctrl.maplibregl-ctrl-attrib {
   display: none !important;
+}
+#threeDView:-webkit-full-screen #display-mode-toggle { display: block; }
+#threeDView:-webkit-full-screen #display-mode-toggle.active {
+  border-color: #69e0ff;
+  color: #ffffff;
+  background: rgba(0, 92, 128, 0.92);
+  box-shadow: 0 0 0 2px rgba(105, 224, 255, 0.28);
 }
 #threeDView:-webkit-full-screen .details-panel.open {
   top: 18px;
