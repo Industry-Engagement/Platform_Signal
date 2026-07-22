@@ -133,6 +133,23 @@
     function isDimmed(feature) {
       return routeFocusExists() && !isSelected(feature);
     }
+    function selectRouteFromMap(info) {
+      var feature = info && info.object;
+      var routeId = feature && feature.properties && feature.properties.routeId;
+      if (!routeId) return;
+      // The live-train circles are native MapLibre layers above this deck.gl route. When a
+      // train overlaps the casing, let its more specific click handler win instead of also
+      // selecting the route underneath it.
+      var map = window.ThreeDView && window.ThreeDView.getMap();
+      if (map && map.getLayer("three-d-live-trains") &&
+          Number.isFinite(Number(info.x)) && Number.isFinite(Number(info.y)) &&
+          map.queryRenderedFeatures([Number(info.x), Number(info.y)], {
+            layers: ["three-d-live-trains"]
+          }).length) return;
+      document.dispatchEvent(new CustomEvent("platform:subway-route-clicked", {
+        detail: { route: routeId }
+      }));
+    }
     // lineBillboard extrudes each ribbon in SCREEN space rather than in the ground plane
     // (GeoJsonLayer's name for PathLayer's `billboard`). Without it the pixel width is only
     // correct viewed straight down, so an oblique 3D camera foreshortens the line until it
@@ -155,7 +172,8 @@
         lineBillboard: true,
         lineJointRounded: true,
         lineCapRounded: true,
-        pickable: false,
+        pickable: true,
+        onClick: selectRouteFromMap,
         // depthBias pushes the casing away from the camera so the colored core always wins
         // the depth comparison. Belt-and-braces alongside DEPTH_ALWAYS: the two ribbons share
         // one centerline, so without separation they are coplanar and z-fight, which showed
@@ -267,7 +285,14 @@
       // flight geometry against the extruded map layers.
       interleaved: mode === "3d",
       layers: [],
-      getTooltip: function (info) { return info.object ? tooltipText(info.object) : null; }
+      getTooltip: function (info) {
+        var object = info.object;
+        if (!object) return null;
+        if (object.properties && object.properties.routeId) {
+          return object.properties.routeId + " Route";
+        }
+        return object.icao24 ? tooltipText(object) : null;
+      }
     });
     map.addControl(overlay);
     state[property] = overlay;
