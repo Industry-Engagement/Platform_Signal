@@ -58,14 +58,21 @@
     messageTimer: null
   };
 
-  var SIGNAL_ROUTE_WINDOW_SECONDS = 15 * 60;
+  var SIGNAL_ROUTE_WINDOW_SECONDS = 60 * 60;
   var SIGNAL_VISUAL_FLOOR_DB = -20;
-  var SIGNAL_RING_MIN_RADIUS_PX = 5;
-  var SIGNAL_RING_MAX_RADIUS_PX = 34;
-  var SIGNAL_RING_MIN_RADIUS_M = 20;
-  var SIGNAL_RING_MAX_RADIUS_M = 350;
+  var SIGNAL_STRENGTH_CONTRAST_EXPONENT = 3;
+  var SIGNAL_RING_MIN_RADIUS_PX = 3;
+  var SIGNAL_RING_MAX_RADIUS_PX = 48;
+  var SIGNAL_RING_MIN_RADIUS_M = 15;
+  var SIGNAL_RING_MAX_RADIUS_M = 500;
   var SIGNAL_RING_SEGMENTS = 20;
-  var SIGNAL_ROUTE_COLOR = 0xff8424;
+  var SIGNAL_FREQUENCY_COLORS = {
+    "118.7": "#3264ff",
+    "120.4": "#ef7d32",
+    "120.8": "#8b5cf6",
+    "121.7": "#18a36f"
+  };
+  var SIGNAL_FREQUENCY_UNKNOWN_COLOR = "#7d8790";
 
   var SUBWAY_OUTLINE_COLOR = [242, 242, 242, 235];   // #f2f2f2 -- matches SubwayOutlineColor in index.html
   var SUBWAY_LINE_WIDTH = 6;
@@ -483,9 +490,9 @@
     var callsign = flight.callsign || flight.icao24.toUpperCase();
     if (isNewSelection) {
       showMessage(signalAvailability.drawable
-        ? callsign + ": loading and framing the selected 15-minute signal route..."
+        ? callsign + ": loading and framing the selected one-hour signal route..."
         : callsign + ": current signal unavailable (" + signalAvailability.reason.toLowerCase() +
-          "); checking the rolling 15-minute route.");
+          "); checking the rolling one-hour route.");
     } else {
       focusSelectedSignalRoute(activeViewMode(), true);
     }
@@ -840,7 +847,7 @@
     var flight = state.flights.find(function (item) { return item.icao24 === state.selectedIcao24; });
     var callsign = flight ? (flight.callsign || flight.icao24.toUpperCase()) : "Selected flight";
     var availability = currentSignalAvailability(flight);
-    showMessage(callsign + ": no modeled signal is available in the rolling 15-minute window (" +
+    showMessage(callsign + ": no modeled signal is available in the rolling one-hour window (" +
       availability.reason.toLowerCase() + ").");
   }
 
@@ -852,6 +859,17 @@
     if (reference == null) return null;
     var relativeDb = Math.max(SIGNAL_VISUAL_FLOOR_DB, Math.min(0, reference - loss));
     return (relativeDb - SIGNAL_VISUAL_FLOOR_DB) / -SIGNAL_VISUAL_FLOOR_DB;
+  }
+
+  function signalFrequencyKey(value) {
+    var frequency = finiteNumber(value);
+    return frequency == null ? "unknown" : frequency.toFixed(1);
+  }
+
+  function signalFrequencyColor(value) {
+    return new THREE.Color(
+      SIGNAL_FREQUENCY_COLORS[signalFrequencyKey(value)] || SIGNAL_FREQUENCY_UNKNOWN_COLOR
+    );
   }
 
   function disposeSignalObject(object3d) {
@@ -925,16 +943,25 @@
     return 156543.03392 * Math.cos(latitude * Math.PI / 180) / Math.pow(2, map.getZoom());
   }
 
-  function addLineSegment(target, start, end) {
-    target.push(start.x, start.y, start.z, end.x, end.y, end.z);
+  function makeSignalGeometryTarget() {
+    return { positions: [], colors: [] };
   }
 
-  function makeSignalLineObject(positions, opacity) {
-    if (!positions.length) return null;
+  function addLineSegment(target, start, end, startColor, endColor) {
+    target.positions.push(start.x, start.y, start.z, end.x, end.y, end.z);
+    target.colors.push(
+      startColor.r, startColor.g, startColor.b,
+      endColor.r, endColor.g, endColor.b
+    );
+  }
+
+  function makeSignalLineObject(target, opacity) {
+    if (!target.positions.length) return null;
     var geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(target.positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(target.colors, 3));
     var material = new THREE.LineBasicMaterial({
-      color: SIGNAL_ROUTE_COLOR,
+      vertexColors: true,
       transparent: true,
       opacity: opacity,
       blending: THREE.AdditiveBlending,
@@ -967,11 +994,12 @@
     return right.normalize();
   }
 
-  function buildSignalRunGeometry(run, radiusMinM, radiusMaxM, finalizedPositions, predictedPositions) {
+  function buildSignalRunGeometry(run, radiusMinM, radiusMaxM, finalizedGeometry, predictedGeometry) {
     var centers = run.map(function (sample) { return sample.center; });
     var previousTangent = null;
     var previousRight = null;
     var previousRing = null;
+    var previousColor = null;
     var previousPredicted = false;
     var finalizedRings = 0;
     var predictedRings = 0;
@@ -989,7 +1017,9 @@
         else right.normalize();
       }
       var ringUp = new THREE.Vector3().crossVectors(tangent, right).normalize();
-      var radius = radiusMinM + (radiusMaxM - radiusMinM) * sample.strength;
+      var visualStrength = Math.pow(sample.strength, SIGNAL_STRENGTH_CONTRAST_EXPONENT);
+      var radius = radiusMinM + (radiusMaxM - radiusMinM) * visualStrength;
+      var ringColor = signalFrequencyColor(sample.frequency);
       var ring = [];
       for (var angleIndex = 0; angleIndex < SIGNAL_RING_SEGMENTS; angleIndex += 1) {
         var angle = angleIndex / SIGNAL_RING_SEGMENTS * Math.PI * 2;
@@ -998,20 +1028,33 @@
           .addScaledVector(ringUp, Math.sin(angle) * radius));
       }
 
-      var ringTarget = sample.predicted ? predictedPositions : finalizedPositions;
+      var ringTarget = sample.predicted ? predictedGeometry : finalizedGeometry;
       for (var ringIndex = 0; ringIndex < SIGNAL_RING_SEGMENTS; ringIndex += 1) {
-        addLineSegment(ringTarget, ring[ringIndex], ring[(ringIndex + 1) % SIGNAL_RING_SEGMENTS]);
+        addLineSegment(
+          ringTarget,
+          ring[ringIndex],
+          ring[(ringIndex + 1) % SIGNAL_RING_SEGMENTS],
+          ringColor,
+          ringColor
+        );
       }
       if (sample.predicted) predictedRings += 1;
       else finalizedRings += 1;
 
       if (previousRing) {
-        var strandTarget = sample.predicted || previousPredicted ? predictedPositions : finalizedPositions;
+        var strandTarget = sample.predicted || previousPredicted ? predictedGeometry : finalizedGeometry;
         for (var strandIndex = 0; strandIndex < SIGNAL_RING_SEGMENTS; strandIndex += 1) {
-          addLineSegment(strandTarget, previousRing[strandIndex], ring[strandIndex]);
+          addLineSegment(
+            strandTarget,
+            previousRing[strandIndex],
+            ring[strandIndex],
+            previousColor,
+            ringColor
+          );
         }
       }
       previousRing = ring;
+      previousColor = ringColor;
       previousPredicted = sample.predicted;
       previousTangent = tangent;
       previousRight = right;
@@ -1053,6 +1096,7 @@
         currentRun.push({
           timestamp: timestamp,
           strength: strength,
+          frequency: point.most_likely_frequency_mhz,
           predicted: point.position_status === "predicted",
           center: new THREE.Vector3(
             (Number(point.aircraft_lon) - originLon) * metersPerDegreeLon,
@@ -1066,21 +1110,21 @@
     if (currentRun.length >= 2) runs.push(currentRun);
     if (!runs.length) return null;
 
-    var finalizedPositions = [];
-    var predictedPositions = [];
+    var finalizedGeometry = makeSignalGeometryTarget();
+    var predictedGeometry = makeSignalGeometryTarget();
     var finalizedRings = 0;
     var predictedRings = 0;
     runs.forEach(function (run) {
       var counts = buildSignalRunGeometry(
-        run, radiusMinM, radiusMaxM, finalizedPositions, predictedPositions
+        run, radiusMinM, radiusMaxM, finalizedGeometry, predictedGeometry
       );
       finalizedRings += counts.finalizedRings;
       predictedRings += counts.predictedRings;
     });
 
     var group = new THREE.Group();
-    var finalizedObject = makeSignalLineObject(finalizedPositions, 0.9);
-    var predictedObject = makeSignalLineObject(predictedPositions, 0.38);
+    var finalizedObject = makeSignalLineObject(finalizedGeometry, 0.9);
+    var predictedObject = makeSignalLineObject(predictedGeometry, 0.38);
     if (finalizedObject) group.add(finalizedObject);
     if (predictedObject) group.add(predictedObject);
     return {
@@ -1091,7 +1135,8 @@
         finalizedRings: finalizedRings,
         predictedRings: predictedRings,
         radiusMinM: radiusMinM,
-        radiusMaxM: radiusMaxM
+        radiusMaxM: radiusMaxM,
+        strengthContrastExponent: SIGNAL_STRENGTH_CONTRAST_EXPONENT
       }
     };
   }

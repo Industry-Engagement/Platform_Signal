@@ -302,15 +302,23 @@ button { font: inherit; }
 .subway-6-symbol { background: #396133; }
 .map-legend > .signal-route-legend-item { display: none; flex-basis: 100%; }
 .map-legend > .signal-route-legend-item.visible { display: flex; }
-.signal-route-symbol {
-  width: 26px;
-  height: 17px;
-  flex: 0 0 auto;
-  border: 2px solid var(--signal-route);
-  border-radius: 50%;
-  transform: rotateY(38deg);
-  filter: drop-shadow(0 0 3px rgba(255, 132, 36, 0.72));
+.signal-frequency-key,
+.signal-frequency-key > span {
+  display: inline-flex;
+  align-items: center;
 }
+.signal-frequency-key { gap: 8px; }
+.signal-frequency-key > span { gap: 3px; color: var(--interface-text); }
+.signal-frequency-ring {
+  width: 11px;
+  height: 11px;
+  border: 2px solid;
+  border-radius: 50%;
+}
+.signal-frequency-ring.frequency-1187 { border-color: #3264ff; }
+.signal-frequency-ring.frequency-1204 { border-color: #ef7d32; }
+.signal-frequency-ring.frequency-1208 { border-color: #8b5cf6; }
+.signal-frequency-ring.frequency-1217 { border-color: #18a36f; }
 body[data-view-mode="section"] .map-legend > .signal-route-legend-item { display: none; }
 
 .details-panel {
