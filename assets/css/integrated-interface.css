@@ -107,6 +107,21 @@ button { font: inherit; }
   font-weight: 700;
 }
 
+.hide-map-toggle {
+  min-width: 84px;
+  padding: 8px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  color: var(--interface-muted);
+  background: rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+}
+.hide-map-toggle.active {
+  color: #07111c;
+  background: var(--interface-text);
+  font-weight: 700;
+}
+
 #controls {
   top: 106px;
   left: 18px;
