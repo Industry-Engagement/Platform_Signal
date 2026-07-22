@@ -2476,6 +2476,29 @@
   var btnSectionView = document.getElementById("btn-section-view");
   var btnHideMap = document.getElementById("btn-hide-map");
 
+  // Native fullscreen only renders the selected element and its descendants. The shared
+  // flight/train details panel normally lives beside the three view containers so it works
+  // in Plan, 3D, and Section views. Move that same node into the 3D container only while it
+  // is fullscreen, then restore its exact DOM position on exit. Moving the node preserves
+  // its selection state, live content, close-button listeners, and accessibility attributes.
+  var fullscreenDetailsPanel = document.getElementById("details-panel");
+  var fullscreenDetailsHome = fullscreenDetailsPanel.parentNode;
+  var fullscreenDetailsNextSibling = fullscreenDetailsPanel.nextSibling;
+
+  function syncThreeDFullscreenDetailsPanel() {
+    var fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fullscreenElement === threeDViewEl) {
+      if (fullscreenDetailsPanel.parentNode !== threeDViewEl) {
+        threeDViewEl.appendChild(fullscreenDetailsPanel);
+      }
+    } else if (fullscreenDetailsPanel.parentNode === threeDViewEl) {
+      fullscreenDetailsHome.insertBefore(fullscreenDetailsPanel, fullscreenDetailsNextSibling);
+    }
+  }
+
+  document.addEventListener("fullscreenchange", syncThreeDFullscreenDetailsPanel);
+  document.addEventListener("webkitfullscreenchange", syncThreeDFullscreenDetailsPanel);
+
   var planMap = null;       // MapLibre map instance, created on first use
   var planMapReady = false; // true once the map's style has finished loading
 

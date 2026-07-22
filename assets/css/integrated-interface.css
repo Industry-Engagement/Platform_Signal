@@ -383,6 +383,38 @@ body[data-view-mode="section"] .map-legend { display: none; }
   opacity: 1;
   pointer-events: auto;
 }
+
+/* Keep the fullscreen 3D map visually clear while still allowing a selected
+   flight/train to show its shared details panel. Only the panel background is
+   60% transparent; its text and controls remain fully opaque and readable. */
+#threeDView:fullscreen #threeD-camera-tools,
+#threeDView:fullscreen .maplibregl-ctrl.maplibregl-ctrl-attrib {
+  display: none !important;
+}
+#threeDView:fullscreen .details-panel.open {
+  top: 18px;
+  bottom: auto;
+  left: auto;
+  right: 18px;
+  width: min(380px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  background: rgba(9, 20, 33, 0.4);
+}
+
+/* Safari still exposes the prefixed fullscreen pseudo-class on some versions. */
+#threeDView:-webkit-full-screen #threeD-camera-tools,
+#threeDView:-webkit-full-screen .maplibregl-ctrl.maplibregl-ctrl-attrib {
+  display: none !important;
+}
+#threeDView:-webkit-full-screen .details-panel.open {
+  top: 18px;
+  bottom: auto;
+  left: auto;
+  right: 18px;
+  width: min(380px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  background: rgba(9, 20, 33, 0.4);
+}
 .details-panel [hidden] { display: none !important; }
 .details-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .details-header h2 { color: var(--interface-text); font-size: 25px; }
