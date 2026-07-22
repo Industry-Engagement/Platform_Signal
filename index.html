@@ -2895,6 +2895,24 @@
       : { top: 100, right: 45, bottom: 90, left: 45 };
   }
 
+  function subwayRouteOrbitBounds(bounds) {
+    var west = Number(bounds[0][0]);
+    var south = Number(bounds[0][1]);
+    var east = Number(bounds[1][0]);
+    var north = Number(bounds[1][1]);
+    var centerLongitude = (west + east) / 2;
+    var centerLatitude = (south + north) / 2;
+    var longitudeScale = Math.max(0.2, Math.cos(centerLatitude * Math.PI / 180));
+    var halfLatitudeSpan = Math.max((north - south) / 2, 0.002);
+    var halfLongitudeSpanInLatitudeDegrees = Math.max((east - west) * longitudeScale / 2, 0.002);
+    var halfEnvelope = Math.max(halfLatitudeSpan, halfLongitudeSpanInLatitudeDegrees) * 1.2;
+    var halfLongitudeEnvelope = halfEnvelope / longitudeScale;
+    return [
+      [centerLongitude - halfLongitudeEnvelope, centerLatitude - halfEnvelope],
+      [centerLongitude + halfLongitudeEnvelope, centerLatitude + halfEnvelope]
+    ];
+  }
+
   function selectedSubwayCameraRouteId() {
     return selectedTrainRouteId || activeRouteId;
   }
@@ -3443,6 +3461,7 @@
   var SpindleSignalJson = "Source/Subway_Signal_Strength/subway-web-100.min.json";
   var SpindleProvider = "AVERAGE";
   var SpindleProviderIds = ["ALL", "AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
+  var spindleProviderSetter = null;
   var SpindleCarriersForAll = ["Verizon", "AT&T", "T-Mobile", "Sprint"];
   var SpindleSignalProviderIds = ["AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
   var SpindleProviderColors = {
@@ -3468,6 +3487,8 @@
   var SpindleMinRadiusFactor = 0.08; // radius floor (as a fraction of SpindleMaxRadiusM) so weak-signal sections don't pinch to a hairline
   var SpindleTubeSegments = 10;      // number of flowing longitudinal contour strands around the tube
   var SpindleSamplesPerWindow = 60;  // cross-sections drawn across the whole shown window
+  var SpindleWholeRouteSampleSpacingM = 120;
+  var SpindleWholeRouteMaxSamples = 180;
   var SpindleRingContourEvery = 6;   // draw a faint full ring contour every Nth cross-section
   var SpindleMaxTurnFraction = 0.85; // cap radius at this fraction of the local turning radius, so the
                                       // tube can never be wider than a bend allows -- keeps contour
@@ -3533,7 +3554,9 @@
   }
 
   function applySpindleProviderToRoutes() {
-    if (activeSpindleRouteId && activeSpindleLonLat) {
+    if (activeSpindleRouteId && activeSpindleWholeRoute) {
+      showSpindleRoute(activeSpindleRouteId);
+    } else if (activeSpindleRouteId && activeSpindleLonLat) {
       showSpindleSegment(activeSpindleRouteId, activeSpindleLonLat);
     }
   }
@@ -3542,7 +3565,8 @@
     var box = document.getElementById("signal-tubes-carrier");
     if (!box) return;
     function setSpindleProvider(provider) {
-      if (SpindleProviderIds.indexOf(provider) === -1 || SpindleProvider === provider) return;
+      if (SpindleProviderIds.indexOf(provider) === -1) return false;
+      if (SpindleProvider === provider) return true;
       SpindleProvider = provider;
       box.querySelectorAll("button[data-spindle-provider]").forEach(function (btn) {
         var id = btn.getAttribute("data-spindle-provider");
@@ -3563,7 +3587,9 @@
           : accent;
       });
       applySpindleProviderToRoutes();
+      return true;
     }
+    spindleProviderSetter = setSpindleProvider;
     SpindleProviderIds.forEach(function (id) {
       var btn = document.createElement("button");
       btn.className = "filter-option" + (id === SpindleProvider ? " selected" : "");
@@ -3602,6 +3628,7 @@
   var activeSpindleRouteId = null;   // which route that train belongs to
   var activeSpindleLonLat = null;    // last [lon, lat] the shown spindle was anchored to, so a zoom
                                       // change alone can rebuild it in place (see the "zoom" listeners below)
+  var activeSpindleWholeRoute = false;
 
   function loadSpindleData() {
     if (spindleDataPromise) return spindleDataPromise;
@@ -3728,11 +3755,11 @@
   // shares the same centerline (see showSpindleSegment) rather than sitting side by side --
   // the tubes are additive/transparent, so overlapping them reads as several colors glowing
   // through each other instead of needing lateral separation to stay legible.
-  function buildSpindleTubeGroup(data, start, end, providerId, maxRadiusScale, tubeColor) {
+  function buildSpindleTubeGroup(data, start, end, providerId, maxRadiusScale, tubeColor, sampleCount) {
     var pack = data.signalByProvider[providerId];
     if (!pack) return new THREE.Group();
 
-    var N = SpindleSamplesPerWindow;
+    var N = Math.max(2, sampleCount || SpindleSamplesPerWindow);
     var samples = [], signals = [];
     for (var s = 0; s < N; s++) {
       var d = start + (end - start) * (s / (N - 1));
@@ -3813,18 +3840,10 @@
     return group;
   }
 
-  // Builds and shows the spindle for SpindleWindowM on either side of the given [lon, lat] on
-  // the given route. Replaces any previously shown segment (only one is ever shown at a time).
-  function showSpindleSegment(routeId, lonLatPt) {
+  function showSpindleRange(routeId, start, end, sampleCount) {
     var data = SpindleDataByRoute[routeId];
-    if (!data) return;
-    activeSpindleLonLat = lonLatPt;   // remembered so a zoom change alone can rebuild in place
-    var centerDist = nearestDistanceAlongPath(data, lonLatPt);
-    var start = Math.max(0, centerDist - SpindleWindowM);
-    var end = Math.min(data.totalLen, centerDist + SpindleWindowM);
-    if (end <= start) return;
-
-    var centerSample = pointAtDistance(data, centerDist);
+    if (!data || end <= start) return false;
+    var centerSample = pointAtDistance(data, (start + end) / 2);
     var originLonLat = [
       centerSample.east / data.mPerDegLon,
       -centerSample.south / data.mPerDegLat
@@ -3841,16 +3860,50 @@
       // than the earlier side-by-side layout.
       var radiusScale = count === 1 ? 1 : SpindleAllModeRadiusFactor;
       var tubeColor = SpindleProviderColors[providerId] || SpindleColor_Gold;
-      group.add(buildSpindleTubeGroup(data, start, end, providerId, radiusScale, tubeColor));
+      group.add(buildSpindleTubeGroup(data, start, end, providerId, radiusScale, tubeColor, sampleCount));
     });
 
     addSpindleLayerToMaps(originLonLat, group);
+    return true;
+  }
+
+  // Builds and shows the spindle for SpindleWindowM on either side of the given [lon, lat] on
+  // the given route. Replaces any previously shown segment (only one is ever shown at a time).
+  function showSpindleSegment(routeId, lonLatPt) {
+    var data = SpindleDataByRoute[routeId];
+    if (!data) return false;
+    activeSpindleRouteId = routeId;
+    activeSpindleLonLat = lonLatPt;   // remembered so a zoom change alone can rebuild in place
+    activeSpindleWholeRoute = false;
+    var centerDist = nearestDistanceAlongPath(data, lonLatPt);
+    return showSpindleRange(
+      routeId,
+      Math.max(0, centerDist - SpindleWindowM),
+      Math.min(data.totalLen, centerDist + SpindleWindowM),
+      SpindleSamplesPerWindow
+    );
+  }
+
+  function showSpindleRoute(routeId) {
+    var data = SpindleDataByRoute[routeId];
+    if (!data) return false;
+    activeSpindleTripId = null;
+    activeSpindleRouteId = routeId;
+    activeSpindleLonLat = null;
+    activeSpindleWholeRoute = true;
+    var sampleCount = Math.min(
+      SpindleWholeRouteMaxSamples,
+      Math.max(SpindleSamplesPerWindow, Math.ceil(data.totalLen / SpindleWholeRouteSampleSpacingM))
+    );
+    return showSpindleRange(routeId, 0, data.totalLen, sampleCount);
   }
 
   // Re-diameters the currently shown spindle in place when the active map's zoom changes
   // (see the "zoom" listeners on planMap/threeDMap above) -- a no-op if nothing is shown.
   function rebuildActiveSpindleForZoom() {
-    if (activeSpindleRouteId && activeSpindleLonLat) {
+    if (activeSpindleRouteId && activeSpindleWholeRoute) {
+      showSpindleRoute(activeSpindleRouteId);
+    } else if (activeSpindleRouteId && activeSpindleLonLat) {
       showSpindleSegment(activeSpindleRouteId, activeSpindleLonLat);
     }
   }
@@ -3938,6 +3991,8 @@
   // Narrow bridge for fullscreen Display Mode. It reuses the same selection and
   // spindle paths as a manual train click without replacing either interaction.
   var displaySpindleTripId = null;
+  var displaySpindleRouteId = null;
+  var displaySpindleReadyRouteId = null;
 
   function displayTrainFeatures() {
     var trains = [];
@@ -3957,7 +4012,7 @@
 
   window.PlatformSubwayDisplay = {
     getCandidates: function () {
-      return displayTrainFeatures().map(function (feature) {
+      var trains = displayTrainFeatures().map(function (feature) {
         return {
           kind: "train",
           id: feature.properties.tripId,
@@ -3965,16 +4020,56 @@
           label: feature.properties.route + " Train"
         };
       });
+      var routeCandidates = SpindleRouteIds.filter(function (routeId) {
+        return !!selectedRoutes[routeId];
+      }).map(function (routeId) {
+        return {
+          kind: "subway-route",
+          id: routeId,
+          key: "subway-route:" + routeId,
+          label: routeId + " Route"
+        };
+      });
+      return trains.concat(routeCandidates);
     },
-    select: function (tripId) {
-      var feature = displayTrainFeature(tripId);
+    getProvider: function () { return SpindleProvider; },
+    setProvider: function (provider) {
+      return spindleProviderSetter ? spindleProviderSetter(provider) : false;
+    },
+    select: function (targetId, kind) {
+      if (kind === "subway-route") {
+        var routeId = targetId;
+        if (SpindleRouteIds.indexOf(routeId) === -1 || !selectedRoutes[routeId]) return false;
+        if (selectedTrainTripId) closeTrainDetails();
+        setActiveRoute(routeId);
+        displaySpindleTripId = null;
+        displaySpindleRouteId = routeId;
+        displaySpindleReadyRouteId = null;
+        activeSpindleTripId = null;
+        activeSpindleRouteId = routeId;
+        activeSpindleLonLat = null;
+        activeSpindleWholeRoute = true;
+        clearSpindleSegment();
+        loadSpindleData().then(function (data) {
+          if (!data || displaySpindleRouteId !== routeId) return;
+          if (showSpindleRoute(routeId)) displaySpindleReadyRouteId = routeId;
+        });
+        return true;
+      }
+
+      var feature = displayTrainFeature(targetId);
       if (!feature) return false;
       var properties = feature.properties;
+      if (activeRouteId) setActiveRoute(null);
       selectTrain(properties);
       displaySpindleTripId = properties.tripId;
+      displaySpindleRouteId = null;
+      displaySpindleReadyRouteId = null;
       activeSpindleTripId = properties.tripId;
       activeSpindleRouteId = properties.route;
       activeSpindleLonLat = feature.geometry.coordinates.slice(0, 2);
+      activeSpindleWholeRoute = false;
+      clearSpindleSegment();
       loadSpindleData().then(function (data) {
         if (!data || displaySpindleTripId !== properties.tripId ||
             activeSpindleTripId !== properties.tripId) return;
@@ -3982,6 +4077,26 @@
         if (latest) showSpindleSegment(properties.route, latest.geometry.coordinates);
       });
       return true;
+    },
+    getCameraTarget: function (routeId, kind, map) {
+      if (kind !== "subway-route" || !map || displaySpindleReadyRouteId !== routeId) return null;
+      var camera = subwayRouteCameraData(routeId, "3d");
+      if (!camera) return null;
+      var padding = subwayRouteCameraPadding(map);
+      var orbitMargin = 25;
+      return {
+        kind: "bounds",
+        bounds: subwayRouteOrbitBounds(camera.bounds),
+        bearing: camera.bearing,
+        padding: {
+          top: padding.top + orbitMargin,
+          right: padding.right + orbitMargin,
+          bottom: padding.bottom + orbitMargin,
+          left: padding.left + orbitMargin
+        },
+        maxZoom: 15,
+        ready: true
+      };
     },
     getPose: function (tripId) {
       var feature = displayTrainFeature(tripId);
@@ -3992,14 +4107,20 @@
       };
     },
     clearDisplaySignal: function () {
-      if (!displaySpindleTripId) return;
-      if (activeSpindleTripId === displaySpindleTripId) {
+      if (!displaySpindleTripId && !displaySpindleRouteId) return;
+      var ownsTrainSignal = displaySpindleTripId && activeSpindleTripId === displaySpindleTripId;
+      var ownsRouteSignal = displaySpindleRouteId && activeSpindleWholeRoute &&
+        activeSpindleRouteId === displaySpindleRouteId;
+      if (ownsTrainSignal || ownsRouteSignal) {
         activeSpindleTripId = null;
         activeSpindleRouteId = null;
         activeSpindleLonLat = null;
+        activeSpindleWholeRoute = false;
         clearSpindleSegment();
       }
       displaySpindleTripId = null;
+      displaySpindleRouteId = null;
+      displaySpindleReadyRouteId = null;
     }
   };
   // ======================================================================

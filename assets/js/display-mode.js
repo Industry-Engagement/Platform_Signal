@@ -19,6 +19,7 @@
     selectionVersion: 0,
     current: null,
     lastKey: null,
+    manualSubwayProvider: null,
     orbitStartedAt: null,
     orbitStartBearing: 0,
     orbitCenter: null,
@@ -69,7 +70,8 @@
     if (!all.length) return null;
     var flights = all.filter(function (candidate) { return candidate.kind === "flight"; });
     var trains = all.filter(function (candidate) { return candidate.kind === "train"; });
-    var groups = [flights, trains].filter(function (group) { return group.length; });
+    var routes = all.filter(function (candidate) { return candidate.kind === "subway-route"; });
+    var groups = [flights, trains, routes].filter(function (group) { return group.length; });
     var group = groups[Math.floor(Math.random() * groups.length)];
     return group[Math.floor(Math.random() * group.length)];
   }
@@ -90,6 +92,12 @@
       var api = flightApi();
       return api && api.getCameraTarget ? api.getCameraTarget(state.current.id, map) : null;
     }
+    if (state.current.kind === "subway-route") {
+      var subway = subwayApi();
+      return subway && subway.getCameraTarget
+        ? subway.getCameraTarget(state.current.id, state.current.kind, map)
+        : null;
+    }
     var pose = currentPose();
     if (!pose || !pose.center) return null;
     return {
@@ -100,6 +108,11 @@
       bearing: map.getBearing(),
       ready: true
     };
+  }
+
+  function currentDisplayLabel() {
+    if (!state.current) return "Display Mode";
+    return state.current.label + (state.current.kind === "flight" ? "" : " - ALL");
   }
 
   function clearMotion() {
@@ -157,7 +170,7 @@
     }
 
     state.phase = "moving";
-    setButtonState(true, "Moving to " + state.current.label + " - click to turn Display Mode off");
+    setButtonState(true, "Moving to " + currentDisplayLabel() + " - click to turn Display Mode off");
     var targetZoom = state.current.kind === "flight" ? 13.8 : 14.8;
     state.moveMap = map;
     state.moveEndHandler = function () { finishCameraMove(version); };
@@ -262,7 +275,7 @@
     state.orbitStartBearing = map.getBearing();
     state.lastFrameAt = 0;
     state.center = null;
-    setButtonState(true, "Displaying " + state.current.label + " - click to turn Display Mode off");
+    setButtonState(true, "Displaying " + currentDisplayLabel() + " - click to turn Display Mode off");
     state.phaseTimer = window.setTimeout(function () { finishOrbit(version); }, ORBIT_MS);
     state.animationFrame = window.requestAnimationFrame(function (now) { orbitFrame(now, version); });
   }
@@ -284,7 +297,8 @@
     clearMotion();
     if (candidate.kind === "flight" && subwayApi()) subwayApi().clearDisplaySignal();
     var api = candidate.kind === "flight" ? flightApi() : subwayApi();
-    if (!api || api.select(candidate.id) === false) {
+    if (candidate.kind !== "flight" && api && api.setProvider) api.setProvider("ALL");
+    if (!api || api.select(candidate.id, candidate.kind) === false) {
       state.current = null;
       state.phaseTimer = window.setTimeout(selectNext, TARGET_RETRY_MS);
       return;
@@ -299,6 +313,8 @@
     if (state.active || !isThreeDFullscreen()) return;
     state.active = true;
     state.lastKey = null;
+    var subway = subwayApi();
+    state.manualSubwayProvider = subway && subway.getProvider ? subway.getProvider() : null;
     setButtonState(true);
     selectNext();
   }
@@ -308,7 +324,14 @@
     state.active = false;
     state.selectionVersion += 1;
     clearMotion();
-    if (subwayApi()) subwayApi().clearDisplaySignal();
+    var subway = subwayApi();
+    if (subway) {
+      subway.clearDisplaySignal();
+      if (state.manualSubwayProvider && subway.setProvider) {
+        subway.setProvider(state.manualSubwayProvider);
+      }
+    }
+    state.manualSubwayProvider = null;
     state.current = null;
     setButtonState(false);
   }
