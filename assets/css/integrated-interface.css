@@ -363,7 +363,7 @@ button { font: inherit; }
 .signal-frequency-ring.frequency-1204 { border-color: #ef7d32; }
 .signal-frequency-ring.frequency-1208 { border-color: #8b5cf6; }
 .signal-frequency-ring.frequency-1217 { border-color: #18a36f; }
-body[data-view-mode="section"] .map-legend > .signal-route-legend-item { display: none; }
+body[data-view-mode="section"] .map-legend { display: none; }
 
 .details-panel {
   top: 106px;
