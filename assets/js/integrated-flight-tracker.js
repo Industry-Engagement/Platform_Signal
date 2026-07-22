@@ -532,7 +532,8 @@
     var signal = flight.signal_v2
       ? (flight.signal_v2.live_current || flight.signal_v2.current)
       : null;
-    ui.detailsStatus.textContent = "Version 2 modeled signal";
+    ui.detailsStatus.textContent = "";
+    ui.detailsStatus.hidden = true;
     ui.detailsStatus.style.color = "#8fc7ff";
     ui.detailsCallsign.textContent = flight.callsign || flight.icao24.toUpperCase();
     ui.detailsRoute.textContent = "";

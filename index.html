@@ -157,31 +157,22 @@
   #section-signal-layout {
     display: none;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 3px;
-    margin-top: 10px;
-    padding: 7px;
+    margin: 0;
+    padding: 3px;
     border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.16));
-    border-radius: 8px;
+    border-radius: 10px;
     background: rgba(255, 255, 255, 0.05);
   }
   body[data-view-mode="section"] #section-signal-layout { display: flex; }
-  #section-signal-layout .layout-label {
-    flex-basis: 100%;
-    padding: 0 3px 4px;
-    color: var(--interface-muted, #9eabb4);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
   #section-signal-layout button {
-    flex: 1 1 105px;
+    flex: 0 0 auto;
     border: 0;
-    border-radius: 5px;
-    padding: 6px 10px;
+    border-radius: 8px;
+    padding: 7px 9px;
     background: transparent;
-    color: #3f4f5a;
+    color: var(--interface-muted, #a8bdcb);
     font: inherit;
     font-size: 12px;
     font-weight: 700;
@@ -293,6 +284,11 @@
     </div>
     <div class="topbar-actions">
       <div id="controls">
+        <div id="section-signal-layout" role="group" aria-label="Signal visualization layout">
+          <button type="button" data-signal-layout="along-route" aria-pressed="false">Along Route</button>
+          <button type="button" data-signal-layout="separate-plot" aria-pressed="true">Separate Plot</button>
+        </div>
+
         <div class="panel collapsed">
           <div class="panel-header" role="button" tabindex="0" aria-expanded="false">Route Filters</div>
           <div class="panel-box">
@@ -324,11 +320,6 @@
             <div id="source-box"></div>
             <div class="group-label">Signal tubes</div>
             <div class="filter-options" id="signal-tubes-carrier" role="group" aria-label="Signal tube carrier"></div>
-            <div id="section-signal-layout" role="group" aria-label="Signal visualization layout">
-              <span class="layout-label">Section signal layout</span>
-              <button type="button" data-signal-layout="along-route" aria-pressed="false">Along Route</button>
-              <button type="button" data-signal-layout="separate-plot" aria-pressed="true">Separate Plot</button>
-            </div>
           </div>
         </div>
       </div>
@@ -1938,6 +1929,7 @@
   function renderTrainDetails(p) {
     var color = TrainColors[p.route] || NA;
     var statusEl = document.getElementById("details-status");
+    statusEl.hidden = false;
     statusEl.textContent = "Live train";
     statusEl.style.color = color;
     document.getElementById("details-callsign").textContent = p.route + " Train";
