@@ -233,11 +233,10 @@
   #sectionView #groundLine,
   #sectionView #ticks { stroke: #f2f2f2; stroke-width: 2; }
   #sectionView text { fill: #f2f2f2; }
-  /* Backdrop behind the MapLibre canvas itself, so that when "Hide map" mode dims the
-     basemap's own background layer down to BasemapHiddenOpacity (see applyBasemapHidden),
-     whatever shows through underneath is already black/dark instead of the page's default
-     white -- keeping the composited result dark regardless of that opacity value. */
-  #planMap, #threeDMap { width: 100%; height: 100%; background: #000000; }
+  /* Match the MapLibre ground color behind the canvas. If external vector tiles are
+     still changing zoom levels, this prevents the transparent canvas fallback from flashing
+     pure black. "Hide map" remains black through its opaque background layer below. */
+  #planMap, #threeDMap { width: 100%; height: 100%; background: #00142d; }
   #threeD-camera-tools {
     position: absolute;
     right: 10px;
@@ -1822,7 +1821,7 @@
     "map-rail", "map-minor-roads", "map-major-roads", "map-highways", "map-runways"
   ];
   var BasemapHiddenColor = "#000000";
-  var BasemapHiddenOpacity = 0.7;
+  var BasemapHiddenOpacity = 1;
   var basemapHidden = false;   // true while "Hide map" is toggled on
 
   // Applies (or reverts) hidden state to one already-loaded map. Safe to call on a map
@@ -1841,9 +1840,6 @@
       if (map.getLayer("three-d-buildings")) {
         map.setLayoutProperty("three-d-buildings", "visibility", basemapHidden ? "none" : "visible");
       }
-      // Without this the ground plane still follows real elevation data even with every
-      // basemap layer hidden, which reads as "map with the labels off" rather than "no map".
-      map.setTerrain(basemapHidden ? null : { source: "terrain-dem", exaggeration: 1 });
     }
   }
   function setBasemapHidden(hidden) {
@@ -1868,7 +1864,11 @@
       container: "planMap",
       style: buildMapStyle(),
       center: [MapCenter[1], MapCenter[0]],   // MapLibre wants [lon, lat]
-      zoom: MapZoom
+      zoom: MapZoom,
+      // Keep the previous zoom-level tiles on screen until their replacements arrive.
+      // This avoids a background-only frame when the external vector source is slower
+      // than a wheel/pinch zoom gesture.
+      cancelPendingTileRequestsWhileZooming: false
     });
     planMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
     planMap.addControl(new maplibregl.ScaleControl({ unit: "nautical" }), "bottom-right");
@@ -2077,7 +2077,9 @@
 
   // ===================== 3D View (independent map) =====================
   // The 3D map uses the same editable, label-free vector basemap as Plan View.
-  // Terrain and building extrusions add geometry while reusing MapPalette colors.
+  // Building extrusions add depth while the ground remains flat. Keeping the vector
+  // basemap out of MapLibre's terrain-draping pass prevents ground layers from dropping
+  // to the black canvas fallback during zoom transitions around low-elevation LGA.
   var threeDMap = null;
   var threeDMapReady = false;
   var ThreeDInitialCamera = {
@@ -2104,20 +2106,15 @@
       scrollZoom: true,
       touchZoomRotate: true,
       pitchWithRotate: true,
-      canvasContextAttributes: { antialias: true }
+      canvasContextAttributes: { antialias: true },
+      // Retain the previous vector-tile zoom level until its replacement is ready, keeping
+      // the basemap intact throughout wheel and pinch transitions.
+      cancelPendingTileRequestsWhileZooming: false
     });
     threeDMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
     threeDMap.addControl(new maplibregl.FullscreenControl({ container: threeDViewEl }), "bottom-right");
     threeDMap.on("zoom", rebuildActiveSpindleForZoom);   // re-diameter the shown spindle, if any, as the user zooms
     threeDMap.on("load", function () {
-      if (!threeDMap.getSource("terrain-dem")) {
-        threeDMap.addSource("terrain-dem", {
-          type: "raster-dem",
-          url: "https://tiles.mapterhorn.com/tilejson.json",
-          tileSize: 256
-        });
-      }
-      threeDMap.setTerrain({ source: "terrain-dem", exaggeration: 1 });
       threeDMap.addLayer({
         id: "three-d-buildings",
         source: "openmaptiles",
