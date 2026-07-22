@@ -849,6 +849,7 @@
   // Height needs a *_3D.geojson elevation profile, which currently exists only for the L.
   // Lines without one still get the signal band plus a note where the track would be.
   var SubwayFocusGroundLocation = 1 / 3;
+  var SubwayMetersToFeet = 3.28084;
   var SubwayProfileCarriers = ["AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
 
   function subwaySignalSeries(routeId, carrier) {
@@ -876,29 +877,33 @@
     var depthBandHeight = Math.max(120, h * 0.26);
     if (profile && profile.length > 1) {
       var totalDist = profile[profile.length - 1].dist_along_route_m || 1;
-      var depths = profile.map(function (p) { return Number(p.depth_below_surface_m) || 0; });
-      var maxDepth = Math.max.apply(null, depths.concat([5]));
-      var pxPerM = depthBandHeight / maxDepth;
+      // Preserve the source route profile in meters and convert only the Section View scale.
+      var depthsFt = profile.map(function (p) {
+        return (Number(p.depth_below_surface_m) || 0) * SubwayMetersToFeet;
+      });
+      var maxDepthFt = Math.max.apply(null, depthsFt.concat([10]));
+      var axisMaxDepthFt = Math.max(20, Math.ceil(maxDepthFt / 10) * 10);
+      var pxPerFt = depthBandHeight / axisMaxDepthFt;
       var profileX = function (p) { return plotLeft + (p.dist_along_route_m / totalDist) * plotWidth; };
-      var depthY = function (d) { return groundTop + d * pxPerM; };   // +d below street, -d above
+      var depthY = function (depthFt) { return groundTop + depthFt * pxPerFt; }; // + below street, - above
 
-      // Depth gridlines every 5 m
-      for (var d = 5; d <= maxDepth; d += 5) {
+      // Use clean 10-foot intervals and round the axis down far enough to contain the route.
+      for (var d = 10; d <= axisMaxDepthFt; d += 10) {
         markup += '<line x1="' + plotLeft + '" y1="' + depthY(d).toFixed(1) + '" x2="' + plotRight +
           '" y2="' + depthY(d).toFixed(1) + '" stroke="#3a4a5c" stroke-width="1" stroke-dasharray="4 6"></line>';
         markup += '<text x="' + (plotLeft - 10) + '" y="' + (depthY(d) + 4).toFixed(1) +
-          '" text-anchor="end" font-size="11">-' + d + ' m</text>';
+          '" text-anchor="end" font-size="11">-' + d + ' ft</text>';
       }
 
       var trackPts = profile.map(function (p, i) {
-        return profileX(p).toFixed(1) + "," + depthY(depths[i]).toFixed(1);
+        return profileX(p).toFixed(1) + "," + depthY(depthsFt[i]).toFixed(1);
       }).join(" ");
       markup += '<polyline points="' + trackPts + '" fill="none" stroke="' + color +
         '" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></polyline>';
 
       // Station dots on the track, with names angled so they don't collide
       profile.forEach(function (p, i) {
-        var x = profileX(p), y = depthY(depths[i]);
+        var x = profileX(p), y = depthY(depthsFt[i]);
         markup += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" fill="' +
           White + '" stroke="' + color + '" stroke-width="2"></circle>';
         markup += '<text x="' + x.toFixed(1) + '" y="' + (y - 12).toFixed(1) +
@@ -906,7 +911,7 @@
           (y - 12).toFixed(1) + ')">' + escapeXml(p.station || "") + '</text>';
       });
       markup += '<text x="' + plotLeft + '" y="' + (groundTop - 14) +
-        '" font-size="12" font-weight="700">' + routeId + ' track height vs street level</text>';
+        '" font-size="12" font-weight="700">' + routeId + ' track height vs street level (ft)</text>';
     } else {
       markup += '<text x="' + plotLeft + '" y="' + (groundTop + 40) + '" font-size="12">' +
         'No elevation data for the ' + routeId + ' line - showing carrier signal only.</text>';
