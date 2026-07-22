@@ -244,7 +244,11 @@
     addBoundaryLayers(map, mode);
     ensureSelectedSignalLayer(map, mode);
     var overlay = new deck.MapboxOverlay({
-      interleaved: true,
+      // Plan already has a Three.js custom layer sharing MapLibre's WebGL context.
+      // Giving deck.gl a separate canvas there prevents the two renderers from
+      // clearing each other's framebuffer. Keep interleaving in 3D for depth-aware
+      // flight geometry against the extruded map layers.
+      interleaved: mode === "3d",
       layers: [],
       getTooltip: function (info) { return info.object ? tooltipText(info.object) : null; }
     });
