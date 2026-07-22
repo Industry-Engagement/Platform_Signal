@@ -13,6 +13,7 @@
 <script src="assets/js/gtfs-realtime.proto.js"></script>
 <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
 <script src="https://unpkg.com/deck.gl@9.3.7/dist.min.js"></script>
+<script src="assets/js/signal-visual-scale.js"></script>
 <style>
   html, body {
     margin: 0;
@@ -507,7 +508,7 @@
         <span><i class="signal-frequency-ring frequency-1208"></i>120.8</span>
         <span><i class="signal-frequency-ring frequency-1217"></i>121.7</span>
       </span>
-      <span>MHz &middot; ring size = modeled relative strength (&minus;20 to 0 dB, cubic contrast); translucent = predicted</span>
+      <span id="flight-signal-scale-label">MHz &middot; ring size = modeled relative strength (automatic dB range, cubic contrast); translucent = predicted</span>
     </div>
   </section>
 
@@ -701,7 +702,8 @@
   var activeSectionSignalSelectionVersion = 0;
   var sectionSignalRenderSamples = [];
   var sectionSignalLayout = "separate-plot";
-  var SectionSignalVisualFloorDb = -20;
+  var SectionSignalWindowSeconds = 60 * 60;
+  var SignalVisualScale = window.PlatformSignalVisualScale;
   var SectionSignalFrequencyColors = {
     "118.7": "#3264ff",
     "120.4": "#ef7d32",
@@ -1284,8 +1286,15 @@
   function combinedSectionSignalPoints() {
     var combined = mergeSectionSignalPoints(activeSectionSignalHistory, activeSectionProvisionalSignals);
     if (activeSectionLiveSignal) combined = mergeSectionSignalPoints(combined, [activeSectionLiveSignal]);
+    var windowEnd = activeSectionSignalSince;
+    if (windowEnd == null && combined.length) {
+      windowEnd = Math.max.apply(null, combined.map(function (point) { return Number(point.timestamp); })
+        .filter(Number.isFinite));
+    }
+    var cutoff = (Number.isFinite(windowEnd) ? windowEnd : Date.now() / 1000) - SectionSignalWindowSeconds;
     return combined.filter(function (point) {
-      return sectionSignalPosition(point) && sectionSignalAltitudeFt(point) != null;
+      return Number(point.timestamp) >= cutoff &&
+        sectionSignalPosition(point) && sectionSignalAltitudeFt(point) != null;
     });
   }
 
@@ -1845,11 +1854,16 @@
     var signalPlotBottom = plotBottom;
     var altitudePlotHeight = altitudePlotBottom - plotTop;
     var signalPlotHeight = Math.max(1, signalPlotBottom - signalPlotTop);
+    var finiteLosses = signalPoints.map(function (point) {
+      return point.total_loss_db == null ? NaN : Number(point.total_loss_db);
+    }).filter(Number.isFinite);
+    var signalScale = SignalVisualScale.fromLosses(finiteLosses);
+    var signalVisualFloorDb = signalScale.floorDb;
     function xAt(index) { return plotLeft + cumulative[index] / totalNm * plotWidth; }
     function yAt(altitude) { return altitudePlotBottom - altitude / maxAltitude * altitudePlotHeight; }
     function signalYAt(relativeDb) {
-      var clamped = Math.max(SectionSignalVisualFloorDb, Math.min(0, relativeDb));
-      return signalPlotTop + (0 - clamped) / (0 - SectionSignalVisualFloorDb) * signalPlotHeight;
+      var normalized = SignalVisualScale.normalize(relativeDb, signalVisualFloorDb);
+      return signalPlotBottom - (normalized == null ? 0 : normalized) * signalPlotHeight;
     }
 
     var statusColor = activeSectionFlight.status === "confirmed" ? "#2ed47a" : "#f5a623";
@@ -1870,7 +1884,7 @@
       '" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" opacity="0.78"></polyline>';
 
     if (separatePlot) {
-      [0, -10, SectionSignalVisualFloorDb].forEach(function (relativeDb) {
+      SignalVisualScale.axisTicks(signalVisualFloorDb).forEach(function (relativeDb) {
         var signalGridY = signalYAt(relativeDb);
         markup += '<line x1="' + plotLeft + '" y1="' + signalGridY + '" x2="' + plotRight +
           '" y2="' + signalGridY + '" stroke="#cad1d6" stroke-width="1" stroke-dasharray="4 5"></line>';
@@ -1878,19 +1892,16 @@
           '" text-anchor="end">' + relativeDb + ' dB</text>';
       });
       markup += '<text x="' + plotLeft + '" y="' + (signalPlotTop - 13) +
-        '" font-size="13" font-weight="700">Modeled whole-flight relative signal</text>';
+        '" font-size="13" font-weight="700">Modeled whole-flight relative signal (automatic ' +
+        signalVisualFloorDb + ' to 0 dB range)</text>';
     }
 
-    var finiteLosses = signalPoints.map(function (point) {
-      return point.total_loss_db == null ? NaN : Number(point.total_loss_db);
-    }).filter(Number.isFinite);
-    var flightMinimumLoss = finiteLosses.length ? Math.min.apply(null, finiteLosses) : null;
     var baseSamples = signalPoints.map(function (point, index) {
       var totalLoss = point.total_loss_db == null ? NaN : Number(point.total_loss_db);
-      var hasLoss = Number.isFinite(totalLoss) && flightMinimumLoss != null;
-      var relativeDb = hasLoss ? flightMinimumLoss - totalLoss : null;
+      var hasLoss = Number.isFinite(totalLoss) && signalScale.referenceLossDb != null;
+      var relativeDb = hasLoss ? signalScale.referenceLossDb - totalLoss : null;
       var normalizedStrength = hasLoss
-        ? Math.max(0, Math.min(1, (relativeDb - SectionSignalVisualFloorDb) / -SectionSignalVisualFloorDb))
+        ? SignalVisualScale.normalize(relativeDb, signalVisualFloorDb)
         : 0;
       return {
         point: point,
@@ -1977,7 +1988,8 @@
     markup += '<text x="' + plotLeft + '" y="' + (plotTop - 30) + '" font-size="12">' +
       (separatePlot
         ? 'Shared cumulative-distance X axis &middot; independent altitude and signal Y axes</text>'
-        : 'Waveform height: whole-flight relative signal (0 to &minus;20 dB visual range; taller = stronger)</text>');
+        : 'Waveform height: whole-flight relative signal (' + signalVisualFloorDb +
+          ' to 0 dB automatic visual range; taller = stronger)</text>');
 
     var legendKeys = {};
     var hasUnavailable = false;

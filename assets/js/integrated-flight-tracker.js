@@ -31,6 +31,7 @@
     detailsBody: document.getElementById("details-body"),
     detailsNote: document.getElementById("details-note"),
     signalRouteLegend: document.getElementById("flight-signal-route-legend"),
+    signalScaleLabel: document.getElementById("flight-signal-scale-label"),
     loadingCard: document.getElementById("loading-card"),
     mapMessage: document.getElementById("map-message")
   };
@@ -53,7 +54,6 @@
     selectedSignalProvisional: [],
     selectedSignalSince: null,
     selectedSignalWindowEnd: null,
-    selectedSignalReferenceLossDb: null,
     selectedSignalLoadingIcao24: null,
     selectedSignalSelectionVersion: 0,
     selectedSignalFocusedVersions: { plan: null, "3d": null },
@@ -62,7 +62,7 @@
   };
 
   var SIGNAL_ROUTE_WINDOW_SECONDS = 60 * 60;
-  var SIGNAL_VISUAL_FLOOR_DB = -20;
+  var SignalVisualScale = window.PlatformSignalVisualScale;
   var SIGNAL_STRENGTH_CONTRAST_EXPONENT = 3;
   var SIGNAL_RING_MIN_RADIUS_PX = 3;
   var SIGNAL_RING_MAX_RADIUS_PX = 48;
@@ -671,7 +671,6 @@
     state.selectedSignalProvisional = [];
     state.selectedSignalSince = null;
     state.selectedSignalWindowEnd = null;
-    state.selectedSignalReferenceLossDb = null;
     state.selectedSignalLoadingIcao24 = null;
     state.selectedSignalSelectionVersion += 1;
     state.selectedSignalNoDataMessageVersion = null;
@@ -682,15 +681,6 @@
     if (!ui.signalRouteLegend) return;
     ui.signalRouteLegend.classList.toggle("visible", Boolean(visible));
     ui.signalRouteLegend.setAttribute("aria-hidden", String(!visible));
-  }
-
-  function updateSignalReference(points) {
-    var references = (points || []).map(function (point) {
-      var loss = finiteNumber(point && point.total_loss_db);
-      var relative = finiteNumber(point && point.relative_signal_flight_db);
-      return loss == null || relative == null ? null : loss + relative;
-    }).filter(function (value) { return value != null; });
-    if (references.length) state.selectedSignalReferenceLossDb = Math.min.apply(null, references);
   }
 
   function syncSelectedSignalRoute(flight, loadHistory) {
@@ -710,7 +700,6 @@
       });
     }
     state.selectedSignalProvisional = mergeSignalPoints([], provisional);
-    updateSignalReference([signal.current].concat(signal.predicted_timeline || []));
     trimSelectedSignalRoute(state.selectedSignalWindowEnd || Date.now() / 1000);
     setSignalLegendVisible(drawableSelectedSignalPoints().length >= 2);
     if (loadHistory) loadSelectedSignalHistory();
@@ -738,7 +727,6 @@
             selectionVersion !== state.selectedSignalSelectionVersion) return;
         var incoming = payload.points || [];
         state.selectedSignalHistory = mergeSignalPoints(state.selectedSignalHistory, incoming);
-        updateSignalReference(incoming);
         var finalizedThrough = finiteNumber(payload.finalized_through);
         if (finalizedThrough != null) {
           state.selectedSignalSince = finalizedThrough;
@@ -902,14 +890,11 @@
       availability.reason.toLowerCase() + ").");
   }
 
-  function signalStrength(point, visibleMinimumLoss) {
+  function signalStrength(point, signalScale) {
     var loss = finiteNumber(point && point.total_loss_db);
     if (loss == null) return null;
-    var reference = state.selectedSignalReferenceLossDb;
-    if (reference == null) reference = visibleMinimumLoss;
-    if (reference == null) return null;
-    var relativeDb = Math.max(SIGNAL_VISUAL_FLOOR_DB, Math.min(0, reference - loss));
-    return (relativeDb - SIGNAL_VISUAL_FLOOR_DB) / -SIGNAL_VISUAL_FLOOR_DB;
+    if (!signalScale || signalScale.referenceLossDb == null) return null;
+    return SignalVisualScale.normalize(signalScale.referenceLossDb - loss, signalScale.floorDb);
   }
 
   function signalFrequencyKey(value) {
@@ -1119,7 +1104,11 @@
     if (points.length < 2) return null;
     var losses = points.map(function (point) { return finiteNumber(point.total_loss_db); })
       .filter(function (value) { return value != null; });
-    var visibleMinimumLoss = losses.length ? Math.min.apply(null, losses) : null;
+    var signalScale = SignalVisualScale.fromLosses(losses);
+    if (ui.signalScaleLabel) {
+      ui.signalScaleLabel.textContent = "MHz · ring size = modeled relative strength (automatic " +
+        signalScale.floorDb + " to 0 dB range, cubic contrast); translucent = predicted";
+    }
     var originPoint = points[Math.floor(points.length / 2)];
     var originLat = Number(originPoint.aircraft_lat);
     var originLon = Number(originPoint.aircraft_lon);
@@ -1135,7 +1124,7 @@
     var previousTimestamp = null;
 
     points.forEach(function (point) {
-      var strength = signalStrength(point, visibleMinimumLoss);
+      var strength = signalStrength(point, signalScale);
       var timestamp = Number(point.timestamp);
       var altitude = finiteNumber(point.aircraft_altitude_m);
       if (strength == null || altitude == null ||
@@ -1187,6 +1176,7 @@
         predictedRings: predictedRings,
         radiusMinM: radiusMinM,
         radiusMaxM: radiusMaxM,
+        visualFloorDb: signalScale.floorDb,
         strengthContrastExponent: SIGNAL_STRENGTH_CONTRAST_EXPONENT
       }
     };
