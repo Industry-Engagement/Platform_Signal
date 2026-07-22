@@ -2494,6 +2494,7 @@
           .map(function (f) { return f.properties; })
           .sort(function (a, b) { return a.dist_along_route_m - b.dist_along_route_m; });
         syncThreeDRouteLayer(routeId);   // re-broadcast now that real elevation is available
+        renderTrains();                  // reorient any existing train models on this route
         draw();                          // Section View can now draw this line's height track
       })
       .catch(function () { /* elevation shape unavailable -- flat fallback stays in effect */ });
@@ -2810,6 +2811,7 @@
   var lastRefreshAt = 0;
   var lastTrainSourceUpdateAt = 0;
   var pendingRefreshTimeout = null;
+  var lastTrainHeadingByTripId = {};   // preserves direction for a train at its terminal stop
 
   var trainStopsPromise = null;   // cached so both train-dot placement and the Signal Spindle
                                    // (which also needs real station coordinates) share one fetch
@@ -3020,9 +3022,80 @@
       if (!tu || !tu.trip || !tu.stop_time_update || !tu.stop_time_update.length) continue;
       if (keepRouteIds.indexOf(tu.trip.route_id) === -1) continue;   // drop routes we don't want
       var next = tu.stop_time_update[0];
-      out.push({ routeId: tu.trip.route_id, tripId: tu.trip.trip_id, nextStopId: next.stop_id });
+      var following = tu.stop_time_update.slice(1).filter(function (update) {
+        var id = String(update.stop_id || "").replace(/[NS]$/, "");
+        return !!TrainStops[id];
+      })[0];
+      out.push({
+        routeId: tu.trip.route_id,
+        tripId: tu.trip.trip_id,
+        nextStopId: next.stop_id,
+        followingStopId: following ? following.stop_id : null
+      });
     }
     return out;
+  }
+
+  function bearingBetweenStops(from, to) {
+    if (!from || !to) return null;
+    var lat1 = from.lat * Math.PI / 180;
+    var lat2 = to.lat * Math.PI / 180;
+    var deltaLon = (to.lon - from.lon) * Math.PI / 180;
+    var y = Math.sin(deltaLon) * Math.cos(lat2);
+    var x = Math.cos(lat1) * Math.sin(lat2) -
+      Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
+    if (Math.abs(x) + Math.abs(y) < 1e-12) return null;
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function headingDifference(a, b) {
+    return ((a - b + 540) % 360) - 180;
+  }
+
+  // Find the route segment closest to a reported station position. The next-to-following
+  // stop bearing chooses which way along that segment the model faces, while the segment
+  // itself supplies the exact local tangent.
+  function nearestTrainRoutePose(routeId, position, desiredHeading) {
+    var feature = routeGeoJson3DById[routeId];
+    if (!feature && routeGeoJsonById[routeId]) feature = reprojectGeoJson(routeGeoJsonById[routeId]);
+    if (!feature || !feature.geometry) return null;
+    var lines = feature.geometry.type === "LineString"
+      ? [feature.geometry.coordinates]
+      : feature.geometry.type === "MultiLineString" ? feature.geometry.coordinates : [];
+    var lonScale = 111320 * Math.cos(position[1] * Math.PI / 180);
+    var latScale = 111320;
+    var best = null;
+    lines.forEach(function (line) {
+      for (var i = 1; i < line.length; i++) {
+        var a = line[i - 1];
+        var b = line[i];
+        var ax = (a[0] - position[0]) * lonScale;
+        var ay = (a[1] - position[1]) * latScale;
+        var bx = (b[0] - position[0]) * lonScale;
+        var by = (b[1] - position[1]) * latScale;
+        var dx = bx - ax;
+        var dy = by - ay;
+        var lengthSquared = dx * dx + dy * dy;
+        if (!lengthSquared) continue;
+        var t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared));
+        var px = ax + t * dx;
+        var py = ay + t * dy;
+        var distanceSquared = px * px + py * py;
+        if (best && distanceSquared >= best.distanceSquared) continue;
+        var segmentHeading = bearingBetweenStops(
+          { lon: a[0], lat: a[1] },
+          { lon: b[0], lat: b[1] }
+        );
+        if (desiredHeading != null && Math.abs(headingDifference(segmentHeading, desiredHeading)) > 90) {
+          segmentHeading = (segmentHeading + 180) % 360;
+        }
+        best = {
+          distanceSquared: distanceSquared,
+          heading: segmentHeading
+        };
+      }
+    });
+    return best;
   }
 
   function trainsToGeoJSON(trains) {
@@ -3034,12 +3107,21 @@
       var stopId = (t.nextStopId || "").replace(/[NS]$/, "");
       var stop = TrainStops[stopId];
       if (!stop) return;   // no coordinates for this stop, skip
+      var followingId = (t.followingStopId || "").replace(/[NS]$/, "");
+      var followingStop = TrainStops[followingId];
+      var desiredHeading = bearingBetweenStops(stop, followingStop);
+      if (desiredHeading == null && lastTrainHeadingByTripId[t.tripId] != null) {
+        desiredHeading = lastTrainHeadingByTripId[t.tripId];
+      }
+      var pose = nearestTrainRoutePose(t.routeId, [stop.lon, stop.lat], desiredHeading);
+      var heading = pose && pose.heading != null ? pose.heading : (desiredHeading == null ? 0 : desiredHeading);
+      lastTrainHeadingByTripId[t.tripId] = heading;
       features.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: [stop.lon, stop.lat] },
         properties: {
           route: t.routeId, tripId: t.tripId, color: TrainColors[t.routeId] || NA, nextStop: stop.name,
-          selected: t.tripId === selectedTrainTripId
+          selected: t.tripId === selectedTrainTripId, heading: heading
         }
       });
     });
@@ -3093,7 +3175,8 @@
       detail: {
         count: allGeojson.features.length,
         visibleRoutes: Object.keys(TrainColors).filter(function (routeId) { return selectedRoutes[routeId]; }),
-        updatedAt: lastTrainSourceUpdateAt
+        updatedAt: lastTrainSourceUpdateAt,
+        featureCollection: geojson
       }
     }));
 

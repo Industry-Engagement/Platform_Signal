@@ -21,6 +21,7 @@ FLIGHT_DATA_DIR = APP_DIR.parent
 PROJECT_ROOT = FLIGHT_DATA_DIR.parent
 DEFAULT_CREDENTIALS = FLIGHT_DATA_DIR / "credentials.json"
 PLANE_MODEL = FLIGHT_DATA_DIR / "DC8_AFRC_AIR_0824.glb"
+SUBWAY_MODEL = PROJECT_ROOT / "assets" / "subway-centered.glb"
 SECTION_MUSIC = PROJECT_ROOT / "music" / "section-music-browser-pcm16-clip-53-153.wav"
 PUBLIC_ROOT_NAMES = {"assets", "RouteShape", "Source"}
 PUBLIC_SUFFIXES = {
@@ -102,6 +103,8 @@ class TrackerRequestHandler(BaseHTTPRequestHandler):
             return PROJECT_ROOT / "index.html"
         if path == "/assets/plane.glb":
             return PLANE_MODEL
+        if path in {"/assets/subway.glb", "/assets/subway-centered.glb"}:
+            return SUBWAY_MODEL
         if path == "/media/section-music.wav":
             return SECTION_MUSIC
         if "\\" in path or "\x00" in path:
@@ -181,7 +184,10 @@ class TrackerRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         if partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.send_header("Cache-Control", "public, max-age=86400" if path.suffix == ".glb" else "no-cache")
+        if path == SUBWAY_MODEL:
+            self.send_header("Cache-Control", "no-cache")
+        else:
+            self.send_header("Cache-Control", "public, max-age=86400" if path.suffix == ".glb" else "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         with path.open("rb") as source:

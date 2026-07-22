@@ -48,6 +48,7 @@
     subwayRoutes3D: null,
     subwayStations3D: null,
     subwayStationsColor: null,
+    subwayTrains: null,
     activeSubwayRouteId: null,
     selectedTrainRouteId: null,
     selectedSignalHistory: [],
@@ -89,6 +90,10 @@
   var SUBWAY_LINE_WIDTH_SELECTED = 3;                 // thinner while a train on this route is selected
   var SUBWAY_OUTLINE_WIDTH = 9;
   var SUBWAY_OUTLINE_WIDTH_SELECTED = 16;             // thicker while a train on this route is selected
+  // assets/subway-centered.glb is centered by scripts/center-subway-glb.mjs. Raise its
+  // center by half its measured height so its lowest point rests on the train-dot plane.
+  var SUBWAY_MODEL_HALF_HEIGHT_M = 3.9249777 / 2;
+  var SUBWAY_MODEL_YAW_OFFSET_DEG = 0;
 
   function hexToRgba(hex, alpha) {
     var value = parseInt(String(hex).replace("#", ""), 16);
@@ -175,6 +180,37 @@
         updateTriggers: { getLineColor: state.subwayStationsColor }
       })
     ];
+  }
+
+  function makeSubwayTrainLayer(mode) {
+    var data = state.subwayTrains && state.subwayTrains.features
+      ? state.subwayTrains.features
+      : [];
+    var is3D = mode === "3d";
+    return new deck.ScenegraphLayer({
+      id: (is3D ? "three-d-" : "plan-") + "subway-train-models",
+      data: data,
+      scenegraph: "/assets/subway-centered.glb",
+      getPosition: function (feature) {
+        var coordinates = feature.geometry.coordinates;
+        return [coordinates[0], coordinates[1], SUBWAY_MODEL_HALF_HEIGHT_M];
+      },
+      // The GLB is Y-up with its 23m longitudinal axis on local Z. A 90-degree roll seats
+      // it on the map plane; yaw then follows the route tangent computed in index.html.
+      getOrientation: function (feature) {
+        return [0, (Number(feature.properties.heading) || 0) + SUBWAY_MODEL_YAW_OFFSET_DEG, 90];
+      },
+      getScale: [1, 1, 1],
+      sizeScale: is3D ? 1.15 : 1,
+      sizeMinPixels: is3D ? 1.25 : 1,
+      sizeMaxPixels: is3D ? 4 : 3,
+      _lighting: "pbr",
+      pickable: false,
+      // The 3D route intentionally remains visible through buildings/ground. Give its
+      // train models the same visibility behavior while leaving Plan View depth-normal.
+      parameters: is3D ? DEPTH_ALWAYS : undefined,
+      updateTriggers: { getOrientation: [state.subwayTrains] }
+    });
   }
 
   function filteredFlights() {
@@ -383,10 +419,14 @@
   }
 
   function updateFlightLayers() {
-    if (state.planOverlay) state.planOverlay.setProps({ layers: makeFlightLayers("plan") });
+    if (state.planOverlay) {
+      state.planOverlay.setProps({ layers: makeFlightLayers("plan").concat([makeSubwayTrainLayer("plan")]) });
+    }
     if (state.threeDOverlay) {
-      // Subway layer goes last so it also paints on top of flight trails/planes.
-      state.threeDOverlay.setProps({ layers: makeFlightLayers("3d").concat(makeThreeDSubwayLayer()) });
+      // Subway routes and models go last so they also paint on top of flight trails/planes.
+      state.threeDOverlay.setProps({
+        layers: makeFlightLayers("3d").concat(makeThreeDSubwayLayer(), [makeSubwayTrainLayer("3d")])
+      });
       // The subway layers above register as native layers and can land above the live
       // train dots' native circle layer -- reassert that trains render on top of them.
       if (window.ThreeDView && typeof window.ThreeDView.bringLiveTrainsToFront === "function") {
@@ -1331,11 +1371,13 @@
   });
   document.addEventListener("platform:subways-updated", function (event) {
     var detail = event.detail || {};
+    state.subwayTrains = detail.featureCollection || null;
     ui.subwayCount.textContent = detail.count == null ? "0" : String(detail.count);
     ui.subwayLines.textContent = detail.visibleRoutes && detail.visibleRoutes.length
       ? detail.visibleRoutes.join(" + ")
       : "None";
     ui.subwayUpdate.textContent = detail.updatedAt ? formatClock(detail.updatedAt) : "--";
+    updateFlightLayers();
   });
 
   bindFilter(ui.statusFilter, "statusFilter");

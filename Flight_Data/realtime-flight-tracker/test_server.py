@@ -7,6 +7,7 @@ from server import (
     PLANE_MODEL,
     PROJECT_ROOT,
     SECTION_MUSIC,
+    SUBWAY_MODEL,
     TrackerRequestHandler,
 )
 
@@ -22,6 +23,8 @@ class PublicFileAllowlistTests(unittest.TestCase):
             expected.resolve(),
         )
         self.assertEqual(TrackerRequestHandler._public_file("/assets/plane.glb"), PLANE_MODEL)
+        self.assertEqual(TrackerRequestHandler._public_file("/assets/subway.glb"), SUBWAY_MODEL)
+        self.assertEqual(TrackerRequestHandler._public_file("/assets/subway-centered.glb"), SUBWAY_MODEL)
         self.assertEqual(TrackerRequestHandler._public_file("/media/section-music.wav"), SECTION_MUSIC)
 
     def test_credentials_and_project_internals_are_blocked(self) -> None:
