@@ -43,6 +43,7 @@ button { font: inherit; }
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  background: rgba(9, 20, 33, 0.4);
 }
 
 .topbar-brand-summary {
@@ -300,6 +301,7 @@ button { font: inherit; }
   padding: 10px 13px;
   border-radius: 13px;
   display: flex;
+  background: rgba(9, 20, 33, 0.4);
   flex-wrap: wrap;
   gap: 10px 16px;
   color: var(--interface-muted);
@@ -366,6 +368,7 @@ body[data-view-mode="section"] .map-legend { display: none; }
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
+  background: rgba(9, 20, 33, 0.4);
 }
 
 /* Display Mode occupies the normal camera-tools position only in fullscreen.
@@ -490,6 +493,7 @@ body[data-view-mode="section"] .map-legend { display: none; }
   max-width: min(420px, calc(100vw - 36px));
   padding: 10px 13px;
   border-radius: 10px;
+  background: rgba(9, 20, 33, 0.4);
   color: var(--interface-muted);
   font-size: 11px;
   opacity: 0;
