@@ -192,6 +192,15 @@
     color: #ffffff;
   }
 
+  #signal-tubes-carrier .filter-option {
+    border-width: 2px;
+    border-style: solid;
+    font-weight: 700;
+  }
+  #signal-tubes-carrier .filter-option.selected {
+    color: #07111c;
+  }
+
   /* ---- View containers (Section View / Plan View / 3D View): full screen ---- */
   #sectionView, #planView, #threeDView {
     position: absolute;
@@ -201,7 +210,11 @@
     height: 100%;
   }
   #planView, #threeDView { display: none; }
-  #planMap, #threeDMap { width: 100%; height: 100%; }
+  /* Backdrop behind the MapLibre canvas itself, so that when "Hide map" mode dims the
+     basemap's own background layer down to BasemapHiddenOpacity (see applyBasemapHidden),
+     whatever shows through underneath is already black/dark instead of the page's default
+     white -- keeping the composited result dark regardless of that opacity value. */
+  #planMap, #threeDMap { width: 100%; height: 100%; background: #000000; }
   #threeD-camera-tools {
     position: absolute;
     right: 10px;
@@ -265,6 +278,7 @@
         <button class="mode-button" id="btn-three-d-view" type="button" aria-pressed="false">3D</button>
         <button class="mode-button" id="btn-section-view" type="button" aria-pressed="false">Section</button>
       </div>
+      <button class="hide-map-toggle" id="btn-hide-map" type="button" aria-pressed="false">Hide map</button>
     </div>
   </header>
 
@@ -354,6 +368,8 @@
         </div>
         <div class="group-label">Signal source</div>
         <div id="source-box"></div>
+        <div class="group-label">Signal tubes</div>
+        <div class="filter-options" id="signal-tubes-carrier" role="group" aria-label="Signal tube carrier"></div>
         <div id="section-signal-layout" role="group" aria-label="Signal visualization layout">
           <span class="layout-label">Section signal layout</span>
           <button type="button" data-signal-layout="along-route" aria-pressed="false">Along Route</button>
@@ -395,6 +411,10 @@
   var Signal_1   = "#f2e6b8";   // signal value 1 (yellow / medium)
   var Signal_2   = "#bcd4a8";   // signal value 2 (green / strong)
   var SpindleColor_Gold   = "#ffb347";   // signal spindle contour lines (warm gold, brightness follows signal strength)
+  var SpindleColor_Att    = "#0088ce";   // AT&T brand blue
+  var SpindleColor_TMobile = "#e20074";  // T-Mobile magenta
+  var SpindleColor_Sprint = "#ffdd00";   // Sprint yellow
+  var SpindleColor_Verizon = "#ee0000";  // Verizon red
   // =================================================
 
   var SignalColors = { 0: Signal_0, 1: Signal_1, 2: Signal_2 };
@@ -1434,11 +1454,55 @@
     };
   }
 
+  // ---- "Hide map" mode: actually removes the basemap from MapLibre (rather than
+  // covering it with an HTML overlay) by hiding every basemap content layer buildMapStyle()
+  // defines and recoloring the flat "map-background" layer to a near-black, mostly-opaque
+  // ground. The app's own overlays -- subway lines, live trains, flight layers, the signal
+  // spindle -- are separate layers/sources not listed here, so they stay visible on top of
+  // that ground; only the underlying street map (and, in 3D, the building extrusions and
+  // terrain) goes away. ----
+  var BasemapContentLayerIds = [
+    "map-land-residential", "map-land-commercial", "map-land-industrial", "map-parks",
+    "map-airport-areas", "map-water", "map-waterways", "map-buildings-2d", "map-boundaries",
+    "map-rail", "map-minor-roads", "map-major-roads", "map-highways", "map-runways"
+  ];
+  var BasemapHiddenColor = "#000000";
+  var BasemapHiddenOpacity = 0.7;
+  var basemapHidden = false;   // true while "Hide map" is toggled on
+
+  // Applies (or reverts) hidden state to one already-loaded map. Safe to call on a map
+  // that isn't ready yet (no-ops) -- initPlanMap/initThreeDMap also call this from their
+  // "load" handlers so a map created after the toggle was flipped still picks it up.
+  function applyBasemapHidden(map, mode) {
+    if (!map || !map.isStyleLoaded()) return;
+    BasemapContentLayerIds.forEach(function (id) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", basemapHidden ? "none" : "visible");
+    });
+    if (map.getLayer("map-background")) {
+      map.setPaintProperty("map-background", "background-color", basemapHidden ? BasemapHiddenColor : MapPalette.background);
+      map.setPaintProperty("map-background", "background-opacity", basemapHidden ? BasemapHiddenOpacity : 1);
+    }
+    if (mode === "3d") {
+      if (map.getLayer("three-d-buildings")) {
+        map.setLayoutProperty("three-d-buildings", "visibility", basemapHidden ? "none" : "visible");
+      }
+      // Without this the ground plane still follows real elevation data even with every
+      // basemap layer hidden, which reads as "map with the labels off" rather than "no map".
+      map.setTerrain(basemapHidden ? null : { source: "terrain-dem", exaggeration: 1 });
+    }
+  }
+  function setBasemapHidden(hidden) {
+    basemapHidden = hidden;
+    applyBasemapHidden(planMap, "plan");
+    applyBasemapHidden(threeDMap, "3d");
+  }
+
   var planViewEl = document.getElementById("planView");
   var threeDViewEl = document.getElementById("threeDView");
   var btnPlanView = document.getElementById("btn-plan-view");
   var btnThreeDView = document.getElementById("btn-three-d-view");
   var btnSectionView = document.getElementById("btn-section-view");
+  var btnHideMap = document.getElementById("btn-hide-map");
 
   var planMap = null;       // MapLibre map instance, created on first use
   var planMapReady = false; // true once the map's style has finished loading
@@ -1459,6 +1523,7 @@
       syncAllRouteLayers();     // apply any route selections made before the map existed
       initTrainsLayer();
       loadSpindleData();        // idempotent -- also called from 3D View's load handler, whichever runs first wins
+      applyBasemapHidden(planMap, "plan");   // picks up "Hide map" if it was toggled before this map existed
       document.dispatchEvent(new CustomEvent("platform:plan-map-ready"));
     });
   }
@@ -1687,6 +1752,7 @@
       syncAllThreeDRouteLayers();
       initThreeDTrainsLayer();
       loadSpindleData();
+      applyBasemapHidden(threeDMap, "3d");   // picks up "Hide map" if it was toggled before this map existed
       document.dispatchEvent(new CustomEvent("platform:three-d-map-ready"));
     });
   }
@@ -2127,6 +2193,27 @@
   };
   var SpindleSignalJson = "Source/Subway_Signal_Strength/subway-web-100.min.json";
   var SpindleProvider = "AVERAGE";
+  var SpindleProviderIds = ["ALL", "AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
+  var SpindleCarriersForAll = ["Verizon", "AT&T", "T-Mobile", "Sprint"];
+  var SpindleSignalProviderIds = ["AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
+  var SpindleProviderColors = {
+    AVERAGE: White,
+    "AT&T": SpindleColor_Att,
+    "T-Mobile": SpindleColor_TMobile,
+    Sprint: SpindleColor_Sprint,
+    Verizon: SpindleColor_Verizon
+  };
+  var SpindleProviderLabels = {
+    ALL: "All",
+    AVERAGE: "Average",
+    Verizon: "Verizon",
+    "AT&T": "AT&T",
+    "T-Mobile": "T-Mobile",
+    Sprint: "Sprint"
+  };
+  var SpindleAllModeRadiusFactor = 0.38;    // each tube's max radius vs single-carrier view, so four
+                                             // overlaid carriers (see buildSpindleTubeGroup) don't fully
+                                             // eclipse each other even at full signal strength
   var SpindleWindowM = 500;          // shown length on EACH side of the clicked train
   var SpindleMaxRadiusM = 500;       // radius at full signal strength, in meters
   var SpindleMinRadiusFactor = 0.08; // radius floor (as a fraction of SpindleMaxRadiusM) so weak-signal sections don't pinch to a hairline
@@ -2175,8 +2262,88 @@
     return MapZoom;
   }
 
-  var SpindleDataByRoute = {};   // route id -> { localPts, cum, totalLen, signalValues, maxSignal, mPerDegLon, mPerDegLat }
+  var SpindleDataByRoute = {};   // route id -> { localPts, cum, totalLen, signalByProvider, mPerDegLon, mPerDegLat }
+  var spindleSignalJsonCache = null;
   var spindleDataLoading = false;
+
+  function spindleSignalValuesFromSegs(segs) {
+    var signalValues = [];
+    var i = 0;
+    while (segs[i] !== undefined) { signalValues.push(segs[i].signal); i++; }
+    return signalValues;
+  }
+
+  function spindleSignalPackFromSegs(segs) {
+    var signalValues = spindleSignalValuesFromSegs(segs);
+    var maxSignal = 0;
+    signalValues.forEach(function (v) { if (v > maxSignal) maxSignal = v; });
+    if (maxSignal <= 0) maxSignal = 100;
+    return { signalValues: signalValues, maxSignal: maxSignal };
+  }
+
+  function applySpindleProviderToRoutes() {
+    if (activeSpindleRouteId && activeSpindleLonLat) {
+      showSpindleSegment(activeSpindleRouteId, activeSpindleLonLat);
+    }
+  }
+
+  (function initSignalTubesCarrierControls() {
+    var box = document.getElementById("signal-tubes-carrier");
+    if (!box) return;
+    function setSpindleProvider(provider) {
+      if (SpindleProviderIds.indexOf(provider) === -1 || SpindleProvider === provider) return;
+      SpindleProvider = provider;
+      box.querySelectorAll("button[data-spindle-provider]").forEach(function (btn) {
+        var id = btn.getAttribute("data-spindle-provider");
+        var selected = id === provider;
+        btn.classList.toggle("selected", selected);
+        if (id === "ALL") {
+          btn.style.borderColor = "#9eabb4";
+          btn.style.background = selected ? "#ffffff" : "rgba(255, 255, 255, 0.05)";
+          btn.style.color = selected ? "#07111c" : "#9eabb4";
+          return;
+        }
+        var accent = btn.getAttribute("data-carrier-color");
+        if (!accent) return;
+        btn.style.borderColor = accent;
+        btn.style.background = selected ? accent : "rgba(255, 255, 255, 0.05)";
+        btn.style.color = selected
+          ? (id === "Sprint" || id === "AVERAGE" ? "#07111c" : "#ffffff")
+          : accent;
+      });
+      applySpindleProviderToRoutes();
+    }
+    SpindleProviderIds.forEach(function (id) {
+      var btn = document.createElement("button");
+      btn.className = "filter-option" + (id === SpindleProvider ? " selected" : "");
+      btn.type = "button";
+      btn.setAttribute("data-spindle-provider", id);
+      btn.textContent = SpindleProviderLabels[id] || id;
+      if (id === "ALL") {
+        btn.style.borderColor = "#9eabb4";
+        if (id === SpindleProvider) {
+          btn.style.background = "#ffffff";
+          btn.style.color = "#07111c";
+        } else {
+          btn.style.color = "#9eabb4";
+        }
+      } else {
+        var accent = SpindleProviderColors[id];
+        btn.setAttribute("data-carrier-color", accent);
+        btn.style.borderColor = accent;
+        var selected = id === SpindleProvider;
+        if (selected) {
+          btn.style.background = accent;
+          btn.style.color = (id === "Sprint" || id === "AVERAGE") ? "#07111c" : "#ffffff";
+        } else {
+          btn.style.color = accent;
+        }
+      }
+      btn.addEventListener("click", function () { setSpindleProvider(id); });
+      box.appendChild(btn);
+    });
+  })();
+
   var activeSpindleTripId = null;    // tripId of the train the shown spindle is glued to, if any
   var activeSpindleRouteId = null;   // which route that train belongs to
   var activeSpindleLonLat = null;    // last [lon, lat] the shown spindle was anchored to, so a zoom
@@ -2186,14 +2353,29 @@
     if (spindleDataLoading || Object.keys(SpindleDataByRoute).length) return;
     spindleDataLoading = true;
     fetch(SpindleSignalJson).then(function (r) { return r.json(); }).then(function (signalJson) {
+      spindleSignalJsonCache = signalJson;
       return Promise.all(SpindleRouteIds.map(function (routeId) {
         return fetch(SpindleShapeUrls[routeId]).then(function (r) { return r.json(); }).then(function (shapeGeojson) {
           var lonLat = shapeGeojson.features[0].geometry.coordinates;   // WGS84, already one ordered path
-          var segs = signalJson.HiRes.providerLogs[routeId][SpindleProvider];
-          var signalValues = [];
-          var i = 0;
-          while (segs[i] !== undefined) { signalValues.push(segs[i].signal); i++; }
+          var signalByProvider = {};
+          SpindleSignalProviderIds.forEach(function (providerId) {
+            var segs = signalJson.HiRes.providerLogs[routeId][providerId];
+            if (segs) signalByProvider[providerId] = spindleSignalPackFromSegs(segs);
+          });
           if (lonLat.length < 2) return;
+
+          // One shared denominator across the four real carriers (not AVERAGE, which is
+          // derived from them), so a given raw signal value renders at the same radius
+          // regardless of which carrier reported it -- including in the "no real data,
+          // shared filler value" stretches (e.g. the East River crossing), which previously
+          // rendered at different radii per carrier purely because each carrier normalized
+          // against its own independent peak.
+          var sharedMaxSignal = 0;
+          SpindleCarriersForAll.forEach(function (providerId) {
+            var pack = signalByProvider[providerId];
+            if (pack && pack.maxSignal > sharedMaxSignal) sharedMaxSignal = pack.maxSignal;
+          });
+          if (sharedMaxSignal <= 0) sharedMaxSignal = 100;
 
           // Local flat-earth meters: east = +lon, south = -lat (matches MercatorCoordinate's
           // own x/y sign convention directly, so the map transform needs no extra rotation).
@@ -2209,13 +2391,9 @@
             cum.push(cum[j - 1] + Math.sqrt(dx * dx + dy * dy));
           }
 
-          var maxSignal = 0;
-          signalValues.forEach(function (v) { if (v > maxSignal) maxSignal = v; });
-          if (maxSignal <= 0) maxSignal = 100;
-
           SpindleDataByRoute[routeId] = {
             localPts: localPts, cum: cum, totalLen: cum[cum.length - 1],
-            signalValues: signalValues, maxSignal: maxSignal,
+            signalByProvider: signalByProvider, sharedMaxSignal: sharedMaxSignal,
             mPerDegLon: mPerDegLon, mPerDegLat: mPerDegLat
           };
         });
@@ -2241,9 +2419,12 @@
 
   // Signal strength at an arbitrary distance along the line, linearly interpolated between
   // the dataset's 100 fixed sample points (each at fraction i/99 of the total length).
-  function signalAtDistance(data, d) {
-    var vals = data.signalValues;
+  function signalAtDistanceForProvider(data, d, providerId) {
+    var pack = data.signalByProvider[providerId];
+    if (!pack) return 0;
+    var vals = pack.signalValues;
     var Nv = vals.length;
+    if (Nv < 1) return 0;
     var frac = Math.max(0, Math.min(1, d / data.totalLen)) * (Nv - 1);
     var i0 = Math.floor(frac), i1 = Math.min(Nv - 1, i0 + 1);
     var t = frac - i0;
@@ -2269,42 +2450,36 @@
     return bestAlong;
   }
 
-  // Builds and shows the spindle for SpindleWindowM on either side of the given [lon, lat] on
-  // the given route. Replaces any previously shown segment (only one is ever shown at a time).
-  function showSpindleSegment(routeId, lonLatPt) {
-    var data = SpindleDataByRoute[routeId];
-    if (!data) return;
-    activeSpindleLonLat = lonLatPt;   // remembered so a zoom change alone can rebuild in place
-    var centerDist = nearestDistanceAlongPath(data, lonLatPt);
-    var start = Math.max(0, centerDist - SpindleWindowM);
-    var end = Math.min(data.totalLen, centerDist + SpindleWindowM);
-    if (end <= start) return;
+  // Builds one carrier-colored tube along [start, end]. In "All" mode every carrier's tube
+  // shares the same centerline (see showSpindleSegment) rather than sitting side by side --
+  // the tubes are additive/transparent, so overlapping them reads as several colors glowing
+  // through each other instead of needing lateral separation to stay legible.
+  function buildSpindleTubeGroup(data, start, end, providerId, maxRadiusScale, tubeColor) {
+    var pack = data.signalByProvider[providerId];
+    if (!pack) return new THREE.Group();
 
     var N = SpindleSamplesPerWindow;
     var samples = [], signals = [];
     for (var s = 0; s < N; s++) {
       var d = start + (end - start) * (s / (N - 1));
       samples.push(pointAtDistance(data, d));
-      signals.push(signalAtDistance(data, d));
+      signals.push(signalAtDistanceForProvider(data, d, providerId));
     }
 
-    var maxSignal = data.maxSignal;
+    // Normalized against the route's shared max across all carriers (data.sharedMaxSignal),
+    // not this carrier's own peak (pack.maxSignal) -- so identical raw readings from
+    // different carriers render at the same radius instead of each self-normalizing to
+    // fill the same range. See the comment in loadSpindleData for why.
+    var maxSignal = data.sharedMaxSignal;
     function normSignal(s) { return Math.max(0, Math.min(1, signals[s] / maxSignal)); }
 
-    // Flat-ended: no tapering envelope -- radius follows signal strength alone, so the cut
-    // ends of the window are open/flat rather than pinching to a point.
     var zoomDiameterScale = spindleZoomDiameterScale(activeSpindleMapZoom());
     var radius = [];
     for (var s = 0; s < N; s++) {
       var strength = SpindleMinRadiusFactor + (1 - SpindleMinRadiusFactor) * normSignal(s);
-      radius.push(strength * SpindleMaxRadiusM * zoomDiameterScale);
+      radius.push(strength * SpindleMaxRadiusM * maxRadiusScale * zoomDiameterScale);
     }
 
-    // Clamp radius by local turning radius: on a bend, a cross-section wider than the bend
-    // itself would have its inside edge cross past the path's own centerline -- which is
-    // exactly what makes contour strands visually cross each other through a tight turn.
-    // Capping each radius at a fraction of the local curve radius keeps every cross-section
-    // inside what the bend can actually support.
     var stepLen = (end - start) / (N - 1);
     for (var s2 = 1; s2 < N - 1; s2++) {
       var a0 = samples[s2 - 1], a1 = samples[s2 + 1];
@@ -2317,15 +2492,12 @@
     }
 
     var origin = samples[Math.floor(N / 2)];
-    var originLonLat = [origin.east / data.mPerDegLon, -origin.south / data.mPerDegLat];
     var segsAround = SpindleTubeSegments;
-
-    // Every cross-section ring, in local (east, south, altitude) meters relative to origin.
     var ringVerts = [];
     for (var s3 = 0; s3 < N; s3++) {
       var c = samples[s3];
       var r = radius[s3];
-      var right = [c.tS, -c.tE];   // horizontal, perpendicular to tangent (east/south plane)
+      var right = [c.tS, -c.tE];
       var centerEast = c.east - origin.east;
       var centerSouth = c.south - origin.south;
       var centerAlt = -SpindleBurialDepthM;
@@ -2334,18 +2506,14 @@
         var ang = (a / segsAround) * Math.PI * 2;
         var offH = Math.cos(ang) * r;
         var offV = Math.sin(ang) * r;
-        // local frame matches MercatorCoordinate directly: X=east, Y=south, Z=altitude(up)
         ring.push([centerEast + right[0] * offH, centerSouth + right[1] * offH, centerAlt + offV]);
       }
       ringVerts.push(ring);
     }
 
     var group = new THREE.Group();
-    var gold = new THREE.Color(SpindleColor_Gold);
+    var color = new THREE.Color(tubeColor);
 
-    // Flowing longitudinal contour strands -- one per angular position, running the length
-    // of the window. This is the "contour line" look: many thin glowing tubes tracing the
-    // tube's surface, brightening/dimming with signal strength along the way.
     for (var a2 = 0; a2 < segsAround; a2++) {
       var strandPts = [], strandBrightness = [];
       for (var s4 = 0; s4 < N; s4++) {
@@ -2353,11 +2521,9 @@
         strandPts.push(new THREE.Vector3(v[0], v[1], v[2]));
         strandBrightness.push(0.35 + 0.65 * normSignal(s4));
       }
-      group.add(buildGlowTube(strandPts, strandBrightness, gold, false, 0.85));
+      group.add(buildGlowTube(strandPts, strandBrightness, color, false, 0.85));
     }
 
-    // Sparse ring contours -- literal iso-radius rings, every SpindleRingContourEvery
-    // cross-sections, to reinforce the "contour line" reading.
     for (var s5 = 0; s5 < N; s5 += SpindleRingContourEvery) {
       var ring2 = ringVerts[s5];
       var ringPts = [], ringBrightness = [];
@@ -2365,8 +2531,42 @@
         ringPts.push(new THREE.Vector3(ring2[a3][0], ring2[a3][1], ring2[a3][2]));
         ringBrightness.push(0.35 + 0.65 * normSignal(s5));
       }
-      group.add(buildGlowTube(ringPts, ringBrightness, gold, true, 0.3));
+      group.add(buildGlowTube(ringPts, ringBrightness, color, true, 0.3));
     }
+
+    return group;
+  }
+
+  // Builds and shows the spindle for SpindleWindowM on either side of the given [lon, lat] on
+  // the given route. Replaces any previously shown segment (only one is ever shown at a time).
+  function showSpindleSegment(routeId, lonLatPt) {
+    var data = SpindleDataByRoute[routeId];
+    if (!data) return;
+    activeSpindleLonLat = lonLatPt;   // remembered so a zoom change alone can rebuild in place
+    var centerDist = nearestDistanceAlongPath(data, lonLatPt);
+    var start = Math.max(0, centerDist - SpindleWindowM);
+    var end = Math.min(data.totalLen, centerDist + SpindleWindowM);
+    if (end <= start) return;
+
+    var centerSample = pointAtDistance(data, centerDist);
+    var originLonLat = [
+      centerSample.east / data.mPerDegLon,
+      -centerSample.south / data.mPerDegLat
+    ];
+
+    var providersToShow = SpindleProvider === "ALL"
+      ? SpindleCarriersForAll.slice()
+      : [SpindleProvider];
+    var group = new THREE.Group();
+    var count = providersToShow.length;
+    providersToShow.forEach(function (providerId) {
+      // Every carrier's tube shares the same centerline in "All" mode -- see
+      // buildSpindleTubeGroup's doc comment for why overlaying reads better here
+      // than the earlier side-by-side layout.
+      var radiusScale = count === 1 ? 1 : SpindleAllModeRadiusFactor;
+      var tubeColor = SpindleProviderColors[providerId] || SpindleColor_Gold;
+      group.add(buildSpindleTubeGroup(data, start, end, providerId, radiusScale, tubeColor));
+    });
 
     addSpindleLayerToMaps(originLonLat, group);
   }
@@ -2488,6 +2688,16 @@
   btnPlanView.addEventListener("click", function () { setViewMode("plan"); });
   btnThreeDView.addEventListener("click", function () { setViewMode("3d"); });
   btnSectionView.addEventListener("click", function () { setViewMode("section"); });
+
+  // Applies to Plan View and 3D View (see applyBasemapHidden above) -- Section View has no
+  // MapLibre map to hide, so the toggle has no effect there beyond staying pressed/ready
+  // for whichever map view is opened next.
+  btnHideMap.addEventListener("click", function () {
+    var hidden = !basemapHidden;
+    setBasemapHidden(hidden);
+    btnHideMap.classList.toggle("active", hidden);
+    btnHideMap.setAttribute("aria-pressed", String(hidden));
+  });
 
   window.addEventListener("resize", function () {
     if (planMap) planMap.resize();
