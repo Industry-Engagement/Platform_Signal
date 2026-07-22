@@ -45,6 +45,9 @@
     planSignalLayer: null,
     threeDSignalLayer: null,
     subwayRoutes3D: null,
+    subwayStations3D: null,
+    subwayStationsColor: null,
+    activeSubwayRouteId: null,
     selectedTrainRouteId: null,
     selectedSignalHistory: [],
     selectedSignalProvisional: [],
@@ -93,10 +96,14 @@
   // "platform:three-d-subway-routes-updated" below) rather than a fetch here,
   // since index.html already owns loading/reprojecting the route shapes.
   function makeThreeDSubwayLayer() {
-    if (!state.subwayRoutes3D || !state.subwayRoutes3D.features.length) return [];
-    var selectedRouteId = state.selectedTrainRouteId;
-    function isSelected(feature) { return feature.properties.routeId === selectedRouteId; }
-    return [
+    if (!state.subwayRoutes3D || !state.subwayRoutes3D.features.length) return makeThreeDStationLayer();
+    // A route reads as highlighted when a train on it is selected OR when its button is the
+    // focused line in the Route Filters panel (see setActiveRoute in index.html).
+    function isSelected(feature) {
+      var id = feature.properties.routeId;
+      return id === state.selectedTrainRouteId || id === state.activeSubwayRouteId;
+    }
+    return makeThreeDStationLayer().concat([
       // Thin light-grey casing underneath every route line; thickens when a train on
       // that route is selected (mirrors setRouteHighlighted() for Plan View in index.html).
       new deck.GeoJsonLayer({
@@ -109,7 +116,7 @@
         lineCapRounded: true,
         pickable: false,
         parameters: { depthTest: false },
-        updateTriggers: { getLineWidth: selectedRouteId }
+        updateTriggers: { getLineWidth: [state.selectedTrainRouteId, state.activeSubwayRouteId] }
       }),
       new deck.GeoJsonLayer({
         id: "three-d-subway-lines",
@@ -121,7 +128,31 @@
         lineCapRounded: true,
         pickable: false,
         parameters: { depthTest: false },
-        updateTriggers: { getLineWidth: selectedRouteId }
+        updateTriggers: { getLineWidth: [state.selectedTrainRouteId, state.activeSubwayRouteId] }
+      })
+    ]);
+  }
+
+  // Station dots for the focused line, broadcast by syncActiveStationDots in index.html.
+  // Same depthTest:false treatment as the route lines so terrain/buildings can't hide them.
+  function makeThreeDStationLayer() {
+    if (!state.subwayStations3D || !state.subwayStations3D.features.length) return [];
+    return [
+      new deck.GeoJsonLayer({
+        id: "three-d-subway-stations",
+        data: state.subwayStations3D,
+        pointType: "circle",
+        pointRadiusUnits: "pixels",
+        getPointRadius: 4,
+        pointRadiusMinPixels: 2,
+        getFillColor: SUBWAY_OUTLINE_COLOR,
+        getLineColor: hexToRgba(state.subwayStationsColor || "#f2f2f2", 255),
+        stroked: true,
+        lineWidthUnits: "pixels",
+        getLineWidth: 2,
+        pickable: false,
+        parameters: { depthTest: false },
+        updateTriggers: { getLineColor: state.subwayStationsColor }
       })
     ];
   }
@@ -1256,6 +1287,16 @@
   });
   document.addEventListener("platform:three-d-subway-routes-updated", function (event) {
     state.subwayRoutes3D = (event.detail && event.detail.featureCollection) || null;
+    updateFlightLayers();
+  });
+  document.addEventListener("platform:subway-route-focused", function (event) {
+    state.activeSubwayRouteId = (event.detail && event.detail.route) || null;
+    updateFlightLayers();
+  });
+  document.addEventListener("platform:subway-stations-updated", function (event) {
+    var detail = event.detail || {};
+    state.subwayStations3D = detail.featureCollection || null;
+    state.subwayStationsColor = detail.color || null;
     updateFlightLayers();
   });
   document.addEventListener("platform:train-selected", function (event) {

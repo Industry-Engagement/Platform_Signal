@@ -93,6 +93,32 @@
     border-radius: 8px;
   }
 
+  /* ---- Station dot row: the focused line's stations, evenly spaced along a rule.
+     `color` is set from JS to the route's color; the line and dots inherit it. ---- */
+  #subway-station-dots {
+    display: none;
+    position: relative;
+    align-items: center;
+    justify-content: space-between;
+    margin: -4px 0 14px;
+    padding: 8px 2px;
+  }
+  #subway-station-dots.on { display: flex; }
+  #subway-station-dots::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    height: 2px;
+    background: currentColor;
+  }
+  #subway-station-dots .station-dot {
+    position: relative;   /* sit above the connecting rule */
+    border-radius: 50%;
+    background: currentColor;
+    flex: 0 0 auto;
+  }
+
   /* Source buttons */
   .source-btn {
     width: fit-content;
@@ -549,22 +575,178 @@
   });
 
   // ----- Build route buttons -----
+  // The focused subway line. This is FOCUS, not visibility: every route's line stays drawn
+  // on every view no matter what (selectedRoutes is left permanently on), and clicking a
+  // button only decides which line the station dot row, the Section View profile, and the
+  // Plan/3D highlight are about. Only one line is focused at a time; clicking the focused
+  // button again clears the focus.
+  var activeRouteId = null;
+  var subwayRouteButtons = {};   // route id -> its pill element, so focus can restyle them all
+
   function makeRouteButton(route) {
     var b = document.createElement("div");
-    b.className = "route-btn " + route.shape;
+    // Subway routes render as the same "route-btn pill flight-*" lozenge the flight picker
+    // uses (dark fill from CSS, rounded rectangle), but with the route's own color as the
+    // border ("line") instead of a flight status color. Focus reuses the flight buttons'
+    // own highlight: the .active-flight outline.
+    var isSubway = route.type === "subway";
+    b.className = "route-btn " + (isSubway ? "pill" : route.shape);
     b.textContent = route.label;
-    b.style.background = route.color;
-    b.style.boxShadow = selectedRoutes[route.id] ? "0 0 0 3px " + Theme1_Li : "none";
-    b.addEventListener("click", function () {
-      var on = !selectedRoutes[route.id];
-      selectedRoutes[route.id] = on;
-      b.style.boxShadow = on ? "0 0 0 3px " + Theme1_Li : "none";
-      draw();
-      syncRouteLayer(route.id);   // show/hide this route's line on the Plan View map
-      syncThreeDRouteLayer(route.id); // keep the independent 3D map in sync
-      if (route.id in TrainColors) syncTrainVisibility(on);   // show/hide + refresh this route's live trains
-    });
+    if (isSubway) {
+      b.style.borderColor = route.color;
+      subwayRouteButtons[route.id] = b;
+      b.addEventListener("click", function () {
+        setActiveRoute(activeRouteId === route.id ? null : route.id);
+      });
+    } else {
+      b.style.background = route.color;
+      b.style.boxShadow = selectedRoutes[route.id] ? "0 0 0 3px " + Theme1_Li : "none";
+      b.addEventListener("click", function () {
+        var on = !selectedRoutes[route.id];
+        selectedRoutes[route.id] = on;
+        b.style.boxShadow = on ? "0 0 0 3px " + Theme1_Li : "none";
+        draw();
+        syncRouteLayer(route.id);
+        syncThreeDRouteLayer(route.id);
+        if (route.id in TrainColors) syncTrainVisibility(on);
+      });
+    }
     return b;
+  }
+
+  // Focusing a line: highlight its button, force the data source to Internet Connection,
+  // rebuild the station dot row, redraw Section View, and highlight it on Plan/3D.
+  function setActiveRoute(routeId) {
+    activeRouteId = routeId;
+    Object.keys(subwayRouteButtons).forEach(function (id) {
+      subwayRouteButtons[id].classList.toggle("active-flight", id === activeRouteId);
+    });
+    if (activeRouteId) setSource("Internet Connection");
+    renderStationDotRow();
+    draw();
+    syncActiveRouteHighlight();
+  }
+
+  // ---- Shared data loads for the focused line ----
+  // stationNames[routeId] in the signal JSON is an ordered station list (name/code/position)
+  // and covers every NYC line, not just the two that have route shapes on the maps.
+  var subwaySignalJson = null;        // resolved copy, so the synchronous draw() can use it
+  var subwaySignalJsonPromise = null;
+  function loadSubwaySignalJson() {
+    if (!subwaySignalJsonPromise) {
+      subwaySignalJsonPromise = fetch(SpindleSignalJson)
+        .then(function (r) { return r.json(); })
+        .then(function (json) { subwaySignalJson = json; draw(); return json; });
+    }
+    return subwaySignalJsonPromise;
+  }
+  var stationsGeoJsonPromise = null;
+  function loadStationsGeoJson() {
+    if (!stationsGeoJsonPromise) {
+      stationsGeoJsonPromise = fetch(StationsUrl).then(function (res) { return res.json(); });
+    }
+    return stationsGeoJsonPromise;
+  }
+  // The stations file stores geometry in EPSG:2263, but every feature also carries WGS84
+  // stop_lat/stop_lon in its properties -- use those directly rather than reprojecting.
+  function stationPointsForRoute(fc, routeId) {
+    return fc.features.filter(function (f) {
+      var trains = String(f.properties.trains || "").replace(/,/g, " ").split(/\s+/);
+      return trains.indexOf(routeId) !== -1;
+    }).map(function (f) {
+      return {
+        type: "Feature",
+        properties: { name: f.properties.stop_name, routeId: routeId },
+        geometry: { type: "Point", coordinates: [f.properties.stop_lon, f.properties.stop_lat] }
+      };
+    });
+  }
+
+  // ---- Station dot row under the subway buttons ----
+  var stationDotRow = document.getElementById("subway-station-dots");
+  function renderStationDotRow() {
+    if (!stationDotRow) return;
+    if (!activeRouteId) {
+      stationDotRow.classList.remove("on");
+      stationDotRow.innerHTML = "";
+      return;
+    }
+    var routeId = activeRouteId;
+    loadSubwaySignalJson().then(function (json) {
+      if (activeRouteId !== routeId) return;   // focus moved on while the fetch was in flight
+      var stations = (json.stationNames && json.stationNames[routeId]) || [];
+      if (!stations.length) {
+        stationDotRow.classList.remove("on");
+        stationDotRow.innerHTML = "";
+        return;
+      }
+      var route = routes.filter(function (r) { return r.id === routeId; })[0];
+      stationDotRow.style.color = (route && route.color) || NA;
+      // Shrink the dots as the station count grows so a long line still fits the panel
+      var size = Math.max(6, Math.min(10, Math.floor(320 / stations.length) - 2));
+      stationDotRow.innerHTML = stations.map(function (s) {
+        return '<span class="station-dot" style="width:' + size + 'px;height:' + size +
+               'px" title="' + String(s.name || "").replace(/"/g, "&quot;") + '"></span>';
+      }).join("");
+      stationDotRow.classList.add("on");
+    }).catch(function () { /* signal data unavailable -- no dot row */ });
+  }
+
+  // ---- Focus highlight on Plan View + 3D View ----
+  var ActiveStationDotsLayerId = "active-route-stations";
+  function syncActiveRouteHighlight() {
+    // Plan View lines: reuse the same casing/line treatment a selected train already applies,
+    // so a focused route and a selected train can both be highlighted without fighting.
+    if (planMapReady) {
+      subwayRouteIds().forEach(function (routeId) {
+        setRouteHighlighted(routeId, routeId === activeRouteId || routeId === selectedTrainRouteId);
+      });
+    }
+    syncActiveStationDots();
+    // 3D View draws its subway lines as deck.gl layers, so focus travels by broadcast.
+    document.dispatchEvent(new CustomEvent("platform:subway-route-focused", {
+      detail: { route: activeRouteId }
+    }));
+  }
+
+  function syncActiveStationDots() {
+    if (!activeRouteId) {
+      if (planMapReady && planMap.getLayer(ActiveStationDotsLayerId)) planMap.removeLayer(ActiveStationDotsLayerId);
+      if (planMapReady && planMap.getSource(ActiveStationDotsLayerId)) planMap.removeSource(ActiveStationDotsLayerId);
+      document.dispatchEvent(new CustomEvent("platform:subway-stations-updated", {
+        detail: { featureCollection: { type: "FeatureCollection", features: [] } }
+      }));
+      return;
+    }
+    var routeId = activeRouteId;
+    loadStationsGeoJson().then(function (fc) {
+      if (activeRouteId !== routeId) return;
+      var route = routes.filter(function (r) { return r.id === routeId; })[0];
+      var color = (route && route.color) || NA;
+      var data = { type: "FeatureCollection", features: stationPointsForRoute(fc, routeId) };
+      if (planMapReady) {
+        if (planMap.getSource(ActiveStationDotsLayerId)) {
+          planMap.getSource(ActiveStationDotsLayerId).setData(data);
+        } else {
+          planMap.addSource(ActiveStationDotsLayerId, { type: "geojson", data: data });
+          planMap.addLayer({
+            id: ActiveStationDotsLayerId,
+            type: "circle",
+            source: ActiveStationDotsLayerId,
+            paint: {
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 2.5, 14, 6],
+              "circle-color": SubwayOutlineColor,
+              "circle-stroke-width": 2
+            }
+          });
+        }
+        planMap.setPaintProperty(ActiveStationDotsLayerId, "circle-stroke-color", color);
+        bringSubwayToFront();
+      }
+      document.dispatchEvent(new CustomEvent("platform:subway-stations-updated", {
+        detail: { featureCollection: data, color: color }
+      }));
+    }).catch(function () { /* stations unavailable */ });
   }
   routes.forEach(function (r) {
     var row = document.getElementById(r.type === "subway" ? "row-subways" : "row-planes");
@@ -573,22 +755,30 @@
 
   // ----- Build source buttons -----
   var sourceBox = document.getElementById("source-box");
+  var sourceButtons = {};   // label -> element
+
+  // Selects a source option (pass null to clear all). Broken out of the click handler so
+  // focusing a subway route can force "Internet Connection" on -- see setActiveRoute.
+  function setSource(label) {
+    Array.prototype.forEach.call(sourceBox.children, function (el) {
+      el.classList.remove("selected");
+    });
+    if (label && sourceButtons[label]) sourceButtons[label].classList.add("selected");
+    // Station mode is on only when "Internet Connection" is the selected option
+    stationMode = label === "Internet Connection";
+    legend.classList.toggle("on", stationMode);
+    draw();
+    if (!stationMode) { activeSpindleTripId = null; activeSpindleRouteId = null; activeSpindleLonLat = null; clearSpindleSegment(); }   // leaving Internet Connection hides any shown spindle segment
+  }
+
   sources.forEach(function (label) {
     var b = document.createElement("div");
     b.className = "source-btn";
     b.textContent = label;
+    sourceButtons[label] = b;
     b.addEventListener("click", function () {
-      var willSelect = !b.classList.contains("selected");
-      // Single-select: clear every option, then select this one (if it was off)
-      Array.prototype.forEach.call(sourceBox.children, function (el) {
-        el.classList.remove("selected");
-      });
-      if (willSelect) b.classList.add("selected");
-      // Station mode is on only when "Internet Connection" is the selected option
-      stationMode = willSelect && label === "Internet Connection";
-      legend.classList.toggle("on", stationMode);
-      draw();
-      if (!stationMode) { activeSpindleTripId = null; activeSpindleRouteId = null; activeSpindleLonLat = null; clearSpindleSegment(); }   // leaving Internet Connection hides any shown spindle segment
+      // Single-select, and clicking the selected option clears it
+      setSource(b.classList.contains("selected") ? null : label);
     });
     sourceBox.appendChild(b);
   });
@@ -654,6 +844,125 @@
   function hline(x1, y, x2, color, wdt) {
     return '<line x1="' + x1 + '" y1="' + y + '" x2="' + x2 + '" y2="' + y +
            '" stroke="' + color + '" stroke-width="' + wdt + '" stroke-linecap="round"></line>';
+  }
+
+  // ---- Section View: the focused subway line's profile ----------------------
+  // Shown instead of the flight diagrams while a line is focused. The ground line moves up
+  // to 1/3 of the screen (SubwayFocusGroundLocation) to leave room below for two bands:
+  //   1. the track's real height relative to street level -- the ground line IS street
+  //      level, so the track dips below it in tunnel and rises above it where elevated; and
+  //   2. one curve per carrier for signal strength along the same left-to-right axis.
+  // Height needs a *_3D.geojson elevation profile, which currently exists only for the L.
+  // Lines without one still get the signal band plus a note where the track would be.
+  var SubwayFocusGroundLocation = 1 / 3;
+  var SubwayProfileCarriers = ["AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
+
+  function subwaySignalSeries(routeId, carrier) {
+    var logs = subwaySignalJson && subwaySignalJson.HiRes && subwaySignalJson.HiRes.providerLogs;
+    var segs = logs && logs[routeId] && logs[routeId][carrier];
+    if (!segs) return null;
+    var out = [], i = 0;
+    while (segs[i] !== undefined) { out.push(Number(segs[i].signal) || 0); i++; }
+    return out.length ? out : null;
+  }
+
+  function renderSubwayProfile(w, h, groundTop) {
+    if (!activeRouteId) return "";
+    var routeId = activeRouteId;
+    var route = routes.filter(function (r) { return r.id === routeId; })[0];
+    var color = (route && route.color) || NA;
+    var profile = routeElevationProfileById[routeId] || null;
+
+    var plotLeft = 130;
+    var plotRight = Math.max(plotLeft + 220, w - 90);
+    var plotWidth = plotRight - plotLeft;
+    var markup = "";
+
+    // ---- Band 1: height relative to street level ----
+    var depthBandHeight = Math.max(120, h * 0.26);
+    if (profile && profile.length > 1) {
+      var totalDist = profile[profile.length - 1].dist_along_route_m || 1;
+      var depths = profile.map(function (p) { return Number(p.depth_below_surface_m) || 0; });
+      var maxDepth = Math.max.apply(null, depths.concat([5]));
+      var pxPerM = depthBandHeight / maxDepth;
+      var profileX = function (p) { return plotLeft + (p.dist_along_route_m / totalDist) * plotWidth; };
+      var depthY = function (d) { return groundTop + d * pxPerM; };   // +d below street, -d above
+
+      // Depth gridlines every 5 m
+      for (var d = 5; d <= maxDepth; d += 5) {
+        markup += '<line x1="' + plotLeft + '" y1="' + depthY(d).toFixed(1) + '" x2="' + plotRight +
+          '" y2="' + depthY(d).toFixed(1) + '" stroke="#3a4a5c" stroke-width="1" stroke-dasharray="4 6"></line>';
+        markup += '<text x="' + (plotLeft - 10) + '" y="' + (depthY(d) + 4).toFixed(1) +
+          '" text-anchor="end" font-size="11">-' + d + ' m</text>';
+      }
+
+      var trackPts = profile.map(function (p, i) {
+        return profileX(p).toFixed(1) + "," + depthY(depths[i]).toFixed(1);
+      }).join(" ");
+      markup += '<polyline points="' + trackPts + '" fill="none" stroke="' + color +
+        '" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></polyline>';
+
+      // Station dots on the track, with names angled so they don't collide
+      profile.forEach(function (p, i) {
+        var x = profileX(p), y = depthY(depths[i]);
+        markup += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" fill="' +
+          White + '" stroke="' + color + '" stroke-width="2"></circle>';
+        markup += '<text x="' + x.toFixed(1) + '" y="' + (y - 12).toFixed(1) +
+          '" font-size="10" text-anchor="start" transform="rotate(-55 ' + x.toFixed(1) + ',' +
+          (y - 12).toFixed(1) + ')">' + escapeXml(p.station || "") + '</text>';
+      });
+      markup += '<text x="' + plotLeft + '" y="' + (groundTop - 14) +
+        '" font-size="12" font-weight="700">' + routeId + ' track height vs street level</text>';
+    } else {
+      markup += '<text x="' + plotLeft + '" y="' + (groundTop + 40) + '" font-size="12">' +
+        'No elevation data for the ' + routeId + ' line - showing carrier signal only.</text>';
+      depthBandHeight = 40;
+    }
+
+    // ---- Band 2: carrier signal strength ----
+    var signalTop = groundTop + depthBandHeight + 66;
+    var signalBottom = Math.max(signalTop + 90, h - 70);
+    var signalHeight = signalBottom - signalTop;
+
+    var series = {};
+    var maxSignal = 0;
+    SubwayProfileCarriers.forEach(function (carrier) {
+      var values = subwaySignalSeries(routeId, carrier);
+      if (!values) return;
+      series[carrier] = values;
+      values.forEach(function (v) { if (v > maxSignal) maxSignal = v; });
+    });
+    if (maxSignal <= 0) maxSignal = 100;
+
+    markup += '<line x1="' + plotLeft + '" y1="' + signalBottom + '" x2="' + plotRight +
+      '" y2="' + signalBottom + '" stroke="#f2f2f2" stroke-width="2"></line>';
+    markup += '<text x="' + plotLeft + '" y="' + (signalTop - 12) +
+      '" font-size="12" font-weight="700">Signal strength by carrier</text>';
+
+    Object.keys(series).forEach(function (carrier, ci) {
+      var values = series[carrier];
+      var pts = values.map(function (v, i) {
+        var x = plotLeft + (i / (values.length - 1)) * plotWidth;
+        var y = signalBottom - (v / maxSignal) * signalHeight;
+        return x.toFixed(1) + "," + y.toFixed(1);
+      }).join(" ");
+      var carrierColor = SpindleProviderColors[carrier] || White;
+      markup += '<polyline points="' + pts + '" fill="none" stroke="' + carrierColor +
+        '" stroke-width="' + (carrier === "AVERAGE" ? 2.5 : 1.6) + '" opacity="' +
+        (carrier === "AVERAGE" ? 1 : 0.85) + '"></polyline>';
+      // Legend swatch
+      var lx = plotLeft + ci * 108;
+      markup += '<line x1="' + lx + '" y1="' + (signalBottom + 24) + '" x2="' + (lx + 18) +
+        '" y2="' + (signalBottom + 24) + '" stroke="' + carrierColor + '" stroke-width="3"></line>';
+      markup += '<text x="' + (lx + 24) + '" y="' + (signalBottom + 28) + '" font-size="11">' +
+        escapeXml(SpindleProviderLabels[carrier] || carrier) + '</text>';
+    });
+
+    return markup;
+  }
+
+  function escapeXml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   // A selected route in plain mode: a single colored line
@@ -1209,12 +1518,17 @@
   function draw() {
     var w = window.innerWidth;
     var h = window.innerHeight;
-    var groundTop = h * GroundLocation;
+    // Focusing a subway line raises the ground line to 1/3 of the screen, leaving the lower
+    // two thirds for that line's height track and carrier signal bands.
+    var groundTop = h * (activeRouteId ? SubwayFocusGroundLocation : GroundLocation);
     var groundHeight = h - groundTop;
 
     // In station mode the scene widens to fit the longest selected route
+    // The focused-line profile lays itself out within the window, so the scene must not
+    // widen into the horizontally scrolling station-mode layout while it is showing.
+    legend.classList.toggle("on", stationMode && !activeRouteId);
     var maxStations = 0;
-    if (stationMode) {
+    if (stationMode && !activeRouteId) {
       routes.forEach(function (r) {
         if (csvData[r.id]) {   // in station mode, every data route is auto-shown
           maxStations = Math.max(maxStations, csvData[r.id].order.length);
@@ -1256,19 +1570,25 @@
       ticks.innerHTML = th;
     }
 
-    // Selected routes
+    // Selected routes. While a line is focused its own profile replaces the usual schematic
+    // route lines entirely, so the height/signal bands have the scene to themselves.
     var out = "";
-    routes.forEach(function (r) {
-      var hasData = !!csvData[r.id];
-      // A route is drawn if it is manually selected, or (in station mode) it has data
-      if (!selectedRoutes[r.id] && !(stationMode && hasData)) return;
-      var y = groundTop + groundHeight * SubwaySlots[r.slot];
-      out += (stationMode && hasData)
-        ? renderStationRoute(r, y, csvData[r.id])
-        : renderPlainLine(r, y, w);
-    });
+    if (activeRouteId) {
+      out = renderSubwayProfile(w, h, groundTop);
+    } else {
+      routes.forEach(function (r) {
+        var hasData = !!csvData[r.id];
+        // A route is drawn if it is manually selected, or (in station mode) it has data
+        if (!selectedRoutes[r.id] && !(stationMode && hasData)) return;
+        var y = groundTop + groundHeight * SubwaySlots[r.slot];
+        out += (stationMode && hasData)
+          ? renderStationRoute(r, y, csvData[r.id])
+          : renderPlainLine(r, y, w);
+      });
+    }
     routeLines.innerHTML = out;
-    flightProfile.innerHTML = renderFlightAltitudeProfile(w, groundTop);
+    // Requirement: focusing a subway line hides every flight diagram in Section View.
+    flightProfile.innerHTML = activeRouteId ? "" : renderFlightAltitudeProfile(w, groundTop);
   }
 
   window.addEventListener("resize", draw);
@@ -1541,6 +1861,7 @@
     planMap.on("load", function () {
       planMapReady = true;
       syncAllRouteLayers();     // apply any route selections made before the map existed
+      syncActiveRouteHighlight();   // and any line focused before the map existed
       initTrainsLayer();
       loadSpindleData();        // idempotent -- also called from 3D View's load handler, whichever runs first wins
       applyBasemapHidden(planMap, "plan");   // picks up "Hide map" if it was toggled before this map existed
@@ -1577,6 +1898,9 @@
   // EPSG:2263 shape from routeGeoJsonById, never this. ----
   var RouteThreeDShapeUrls = { L: "RouteShape/NYCSubways/Subway_L_3D.geojson" };
   var routeGeoJson3DById = {};   // route id -> WGS84 GeoJSON LineString Feature with real z
+  // route id -> ordered per-station elevation records (depth_below_surface_m, track_elevation_m,
+  // dist_along_route_m ...), used to draw the Section View height track.
+  var routeElevationProfileById = {};
   Object.keys(RouteThreeDShapeUrls).forEach(function (routeId) {
     fetch(RouteThreeDShapeUrls[routeId])
       .then(function (res) { return res.json(); })
@@ -1584,7 +1908,12 @@
         var lineFeature = fc.features.filter(function (f) { return f.geometry.type === "LineString"; })[0];
         if (!lineFeature) return;
         routeGeoJson3DById[routeId] = lineFeature;
+        routeElevationProfileById[routeId] = fc.features
+          .filter(function (f) { return f.geometry.type === "Point"; })
+          .map(function (f) { return f.properties; })
+          .sort(function (a, b) { return a.dist_along_route_m - b.dist_along_route_m; });
         syncThreeDRouteLayer(routeId);   // re-broadcast now that real elevation is available
+        draw();                          // Section View can now draw this line's height track
       })
       .catch(function () { /* elevation shape unavailable -- flat fallback stays in effect */ });
   });
