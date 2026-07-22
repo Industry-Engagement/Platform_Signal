@@ -101,6 +101,10 @@
   var SUBWAY_DOT_RADIUS = styleGlobal("SubwayDotRadius3D", 4);
   var SUBWAY_DOT_RADIUS_MIN = styleGlobal("SubwayDotRadius3DMin", 2);
   var SUBWAY_DOT_STROKE_WIDTH = styleGlobal("SubwayDotStrokeWidth", 2);
+  // Non-focused routes dim to this while another route/train/flight has focus -- the Plan
+  // View equivalent is RouteDimColor + RouteDimOpacity in index.html (kept as a separate CSS
+  // color + opacity pair there since MapLibre paint properties don't take RGBA arrays).
+  var ROUTE_DIM_COLOR = [217, 217, 217, 128];   // light grey at 50% opacity
   // assets/subway-centered.glb is centered by scripts/center-subway-glb.mjs. Raise its
   // center by half its measured height so its lowest point rests on the train-dot plane.
   var SUBWAY_MODEL_HALF_HEIGHT_M = 3.9249777 / 2;
@@ -126,6 +130,9 @@
       var id = feature.properties.routeId;
       return id === state.selectedTrainRouteId || id === state.activeSubwayRouteId;
     }
+    function isDimmed(feature) {
+      return routeFocusExists() && !isSelected(feature);
+    }
     // lineBillboard extrudes each ribbon in SCREEN space rather than in the ground plane
     // (GeoJsonLayer's name for PathLayer's `billboard`). Without it the pixel width is only
     // correct viewed straight down, so an oblique 3D camera foreshortens the line until it
@@ -142,7 +149,7 @@
       new deck.GeoJsonLayer({
         id: "three-d-subway-lines-casing",
         data: state.subwayRoutes3D,
-        getLineColor: SUBWAY_OUTLINE_COLOR,
+        getLineColor: function (feature) { return isDimmed(feature) ? ROUTE_DIM_COLOR : SUBWAY_OUTLINE_COLOR; },
         getLineWidth: function (feature) { return isSelected(feature) ? SUBWAY_OUTLINE_WIDTH_SELECTED : SUBWAY_OUTLINE_WIDTH; },
         lineWidthUnits: "pixels",
         lineBillboard: true,
@@ -154,12 +161,17 @@
         // one centerline, so without separation they are coplanar and z-fight, which showed
         // up as the core breaking through the casing in dashes.
         parameters: Object.assign({ depthBias: 1, depthBiasSlopeScale: 1 }, DEPTH_ALWAYS),
-        updateTriggers: { getLineWidth: [state.selectedTrainRouteId, state.activeSubwayRouteId] }
+        updateTriggers: {
+          getLineColor: [state.selectedIcao24, state.selectedTrainRouteId, state.activeSubwayRouteId],
+          getLineWidth: [state.selectedTrainRouteId, state.activeSubwayRouteId]
+        }
       }),
       new deck.GeoJsonLayer({
         id: "three-d-subway-lines",
         data: state.subwayRoutes3D,
-        getLineColor: function (feature) { return hexToRgba(feature.properties.color, 235); },
+        getLineColor: function (feature) {
+          return isDimmed(feature) ? ROUTE_DIM_COLOR : hexToRgba(feature.properties.color, 235);
+        },
         getLineWidth: function (feature) { return isSelected(feature) ? SUBWAY_LINE_WIDTH_SELECTED : SUBWAY_LINE_WIDTH; },
         lineWidthUnits: "pixels",
         lineBillboard: true,
@@ -167,7 +179,10 @@
         lineCapRounded: true,
         pickable: false,
         parameters: DEPTH_ALWAYS,
-        updateTriggers: { getLineWidth: [state.selectedTrainRouteId, state.activeSubwayRouteId] }
+        updateTriggers: {
+          getLineColor: [state.selectedIcao24, state.selectedTrainRouteId, state.activeSubwayRouteId],
+          getLineWidth: [state.selectedTrainRouteId, state.activeSubwayRouteId]
+        }
       })
     ].concat(makeThreeDStationLayer());
   }
@@ -234,6 +249,10 @@
       var directionMatches = state.directionFilter === "all" || flight.direction === state.directionFilter;
       return statusMatches && directionMatches;
     });
+  }
+
+  function routeFocusExists() {
+    return !!(state.selectedIcao24 || state.activeSubwayRouteId || state.selectedTrainRouteId);
   }
 
   function attachOverlay(map, mode) {
@@ -360,7 +379,8 @@
         data: confirmed,
         getPath: flightPath,
         getColor: function (flight) {
-          return flight.icao24 === state.selectedIcao24 ? COLORS.selected : COLORS.confirmed;
+          if (flight.icao24 === state.selectedIcao24) return COLORS.selected;
+          return routeFocusExists() ? ROUTE_DIM_COLOR : COLORS.confirmed;
         },
         getWidth: function (flight) { return flight.icao24 === state.selectedIcao24 ? 5 : 3; },
         widthUnits: "pixels",
@@ -370,14 +390,18 @@
         autoHighlight: true,
         highlightColor: [255, 255, 255, 140],
         onClick: onPick,
-        updateTriggers: { getColor: state.selectedIcao24, getWidth: state.selectedIcao24 }
+        updateTriggers: {
+          getColor: [state.selectedIcao24, state.activeSubwayRouteId, state.selectedTrainRouteId],
+          getWidth: state.selectedIcao24
+        }
       }),
       new deck.PathLayer({
         id: prefix + "probable-flight-trails",
         data: probable,
         getPath: flightPath,
         getColor: function (flight) {
-          return flight.icao24 === state.selectedIcao24 ? COLORS.selected : COLORS.probable;
+          if (flight.icao24 === state.selectedIcao24) return COLORS.selected;
+          return routeFocusExists() ? ROUTE_DIM_COLOR : COLORS.probable;
         },
         getWidth: function (flight) { return flight.icao24 === state.selectedIcao24 ? 5 : 3; },
         getDashArray: [3, 2],
@@ -391,7 +415,10 @@
         highlightColor: [255, 255, 255, 140],
         extensions: [new deck.PathStyleExtension({ dash: true })],
         onClick: onPick,
-        updateTriggers: { getColor: state.selectedIcao24, getWidth: state.selectedIcao24 }
+        updateTriggers: {
+          getColor: [state.selectedIcao24, state.activeSubwayRouteId, state.selectedTrainRouteId],
+          getWidth: state.selectedIcao24
+        }
       })
     ];
     layers.push(
