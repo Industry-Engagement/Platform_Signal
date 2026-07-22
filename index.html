@@ -2520,9 +2520,15 @@
   // turned out to encode 6 as hundreds of disconnected/branching fragments with no reliable
   // order at all).
   var SpindleRouteIds = ["L", "6"];   // which routes get the click-to-reveal spindle feature
+  // The *_3D shapes carry the same ordered lon/lat vertices as the *_official ones they were
+  // built from, plus a third component: real track elevation in metres above sea level. That
+  // is the same frame the spindle mesh already works in (its origin is
+  // MercatorCoordinate.fromLngLat(origin, 0), i.e. sea level), so the tube can ride the
+  // track's real depth instead of being draped flat. Falls back to 0 for any vertex without
+  // a z, which reproduces the old flat-drape behaviour.
   var SpindleShapeUrls = {
-    L: "RouteShape/NYCSubways/Subway_L_official.geojson",
-    "6": "RouteShape/NYCSubways/Subway_6_official.geojson"
+    L: "RouteShape/NYCSubways/Subway_L_3D.geojson",
+    "6": "RouteShape/NYCSubways/Subway_6_3D.geojson"
   };
   var SpindleSignalJson = "Source/Subway_Signal_Strength/subway-web-100.min.json";
   var SpindleProvider = "AVERAGE";
@@ -2563,9 +2569,10 @@
   // 0.7 * 6px * 1.81 m/px / 2 (px -> radius) ~= 3.8m.
   var SpindleLineThicknessM = 3.8;   // glow-line tube radius, in meters
   var SpindleLineRadialSegments = 6; // roundness of each glow-line tube's own cross-section
-  var SpindleBurialDepthM = 0;       // how far below street level the centerline sits.
-                                      // 0 = flush with the ground (drape mode). Update this
-                                      // once real subway burial-depth data is available.
+  var SpindleBurialDepthM = 0;       // extra metres below the track centerline. The centerline
+                                      // itself now follows the real track elevation carried by
+                                      // the *_3D route shapes (see SpindleShapeUrls), so 0 means
+                                      // "centered on the track", not "flat on the ground".
 
   // The tube's radius is baked into its geometry in real-world meters (see ringVerts in
   // showSpindleSegment below), so unlike a native MapLibre paint property it doesn't
@@ -2716,6 +2723,10 @@
           var mPerDegLat = 111320;
           var mPerDegLon = 111320 * Math.cos(latRef * Math.PI / 180);
           var localPts = lonLat.map(function (pt) { return [pt[0] * mPerDegLon, -pt[1] * mPerDegLat]; });
+          // Real track elevation per vertex, metres above sea level (see SpindleShapeUrls).
+          var alt = lonLat.map(function (pt) {
+            return pt.length > 2 && Number.isFinite(Number(pt[2])) ? Number(pt[2]) : 0;
+          });
 
           var cum = [0];
           for (var j = 1; j < localPts.length; j++) {
@@ -2725,7 +2736,7 @@
           }
 
           SpindleDataByRoute[routeId] = {
-            localPts: localPts, cum: cum, totalLen: cum[cum.length - 1],
+            localPts: localPts, alt: alt, cum: cum, totalLen: cum[cum.length - 1],
             signalByProvider: signalByProvider, sharedMaxSignal: sharedMaxSignal,
             mPerDegLon: mPerDegLon, mPerDegLat: mPerDegLat
           };
@@ -2747,7 +2758,11 @@
     var south = p0[1] + (p1[1] - p0[1]) * t;
     var tE = p1[0] - p0[0], tS = p1[1] - p0[1];
     var tl = Math.sqrt(tE * tE + tS * tS) || 1;
-    return { east: east, south: south, tE: tE / tl, tS: tS / tl };
+    // Track elevation interpolated the same way as position, so the tube follows the real
+    // profile (dipping through river tubes, climbing onto elevated structure).
+    var a = data.alt || [];
+    var a0 = Number(a[i - 1]) || 0, a1 = Number(a[i]) || 0;
+    return { east: east, south: south, tE: tE / tl, tS: tS / tl, alt: a0 + (a1 - a0) * t };
   }
 
   // Signal strength at an arbitrary distance along the line, linearly interpolated between
@@ -2833,7 +2848,9 @@
       var right = [c.tS, -c.tE];
       var centerEast = c.east - origin.east;
       var centerSouth = c.south - origin.south;
-      var centerAlt = -SpindleBurialDepthM;
+      // Ride the real track elevation at this sample, not a flat drape. SpindleBurialDepthM
+      // stays available as an extra offset below the track centerline.
+      var centerAlt = (Number(c.alt) || 0) - SpindleBurialDepthM;
       var ring = [];
       for (var a = 0; a < segsAround; a++) {
         var ang = (a / segsAround) * Math.PI * 2;
