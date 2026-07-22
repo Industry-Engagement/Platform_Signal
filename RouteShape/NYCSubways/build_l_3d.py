@@ -45,20 +45,20 @@ STRUCTURE = {
     'E 105 St': 'at_grade', 'Canarsie - Rockaway Pkwy': 'at_grade',
 }
 
-# depth_offset_m: positive = below surface (underground), negative = above surface (elevated)
+# depth_offset_ft: positive = below street (underground), negative = above street (elevated)
 # Anchors are representative engineering-scale approximations (not per-station documented
 # values -- MTA does not publish as-built track profiles):
-#  - shallow cut-and-cover underground ~ 9-10 m
-#  - East River tube (1 Av / Bedford Av) needs clearance below the riverbed -> deepest, ~20 m
-#  - standard NYC elevated structure clearance ~ 8 m above street
-ANCHOR_DEPTH_M = {
-    '8 Av': 9, '6 Av': 10, 'Union Sq - 14 St': 9, '3 Av': 9,
-    '1 Av': 20, 'Bedford Av': 20,
-    'Lorimer St': 8, 'Graham Av': 7, 'Grand St': 7, 'Montrose Av': 6, 'Morgan Av': 6,
-    'Jefferson St': 5, 'DeKalb Av': 5, 'Myrtle - Wyckoff Avs': 4, 'Halsey St': 2,
+#  - shallow cut-and-cover underground ~ 30-33 ft
+#  - East River tube (1 Av / Bedford Av) needs clearance below the riverbed -> deepest, ~66 ft
+#  - standard NYC elevated structure clearance ~ 26 ft above street
+ANCHOR_DEPTH_FT = {
+    '8 Av': 30, '6 Av': 33, 'Union Sq - 14 St': 30, '3 Av': 30,
+    '1 Av': 66, 'Bedford Av': 66,
+    'Lorimer St': 26, 'Graham Av': 23, 'Grand St': 23, 'Montrose Av': 20, 'Morgan Av': 20,
+    'Jefferson St': 16, 'DeKalb Av': 16, 'Myrtle - Wyckoff Avs': 13, 'Halsey St': 7,
     'Wilson Av': 0,
-    'Bushwick Av - Aberdeen St': -8, 'Broadway Jct': -8,
-    'Atlantic Av': -7, 'Sutter Av': -5, 'Livonia Av': -3, 'New Lots Av': -1,
+    'Bushwick Av - Aberdeen St': -26, 'Broadway Jct': -26,
+    'Atlantic Av': -23, 'Sutter Av': -16, 'Livonia Av': -10, 'New Lots Av': -3,
     'E 105 St': 0, 'Canarsie - Rockaway Pkwy': 0,
 }
 

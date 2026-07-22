@@ -1911,7 +1911,10 @@
   // without an entry here keep falling back to the flat broadcast in
   // broadcastThreeDSubwayRoutes below. Plan View is unaffected -- it always uses the flat
   // EPSG:2263 shape from routeGeoJsonById, never this. ----
-  var RouteThreeDShapeUrls = { L: "RouteShape/NYCSubways/Subway_L_3D.geojson" };
+  var RouteThreeDShapeUrls = {
+    L: "RouteShape/NYCSubways/Subway_L_3D.geojson",
+    "6": "RouteShape/NYCSubways/Subway_6_3D.geojson"
+  };
   var routeGeoJson3DById = {};   // route id -> WGS84 GeoJSON LineString Feature with real z
   // route id -> ordered per-station elevation records (depth_below_surface_m, track_elevation_m,
   // dist_along_route_m ...), used to draw the Section View height track.
