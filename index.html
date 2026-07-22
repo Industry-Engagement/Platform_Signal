@@ -209,6 +209,140 @@
     color: #ffffff;
   }
 
+  /* The music panel is a sibling of the Section SVG, so draw() can rebuild the existing
+     route/signal groups without ever replacing the audio controls or waveform. */
+  #section-audio-panel[hidden] { display: none; }
+  #section-audio-panel {
+    position: absolute;
+    z-index: 10004;
+    left: 90px;
+    right: 80px;
+    bottom: 18px;
+    box-sizing: border-box;
+    min-height: 176px;
+    padding: 10px 12px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 12px;
+    background: rgba(8, 23, 39, 0.94);
+    color: #f2f2f2;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  }
+  .section-audio-top,
+  .section-audio-controls,
+  .section-audio-status,
+  #section-audio-carriers {
+    display: flex;
+    align-items: center;
+  }
+  .section-audio-top { justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+  .section-audio-heading { min-width: 0; }
+  #section-audio-title { display: block; font-size: 13px; }
+  #section-audio-subtitle {
+    display: block;
+    overflow: hidden;
+    color: #9fb2c0;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #section-audio-carriers { flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+  #section-audio-carriers[hidden] { display: none; }
+  #section-audio-carriers button,
+  #section-audio-play {
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 6px;
+    padding: 4px 7px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #d9e2e8;
+    font: 700 11px "Segoe UI", system-ui, sans-serif;
+    cursor: pointer;
+  }
+  #section-audio-carriers button[aria-pressed="true"] { color: #ffffff; }
+  .section-audio-controls { gap: 9px; }
+  #section-audio-play {
+    flex: 0 0 58px;
+    border-color: var(--theme1-mid, #72a391);
+    background: var(--theme1-mid, #72a391);
+    color: #ffffff;
+    font-size: 12px;
+  }
+  #section-audio-play:disabled { cursor: default; opacity: 0.45; }
+  #section-audio-waveform-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 120px;
+    height: 92px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 7px;
+    overflow: hidden;
+    background: #061525;
+  }
+  .section-audio-wave-row {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    align-items: stretch;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .section-audio-wave-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 7px;
+    color: #cbd6dd;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+  .section-audio-wave-track {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+  #section-audio-waveform {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+  }
+  #section-audio-seek {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 88px;
+    width: calc(100% - 88px);
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  #section-audio-time { flex: 0 0 76px; font-size: 11px; text-align: right; }
+  .section-audio-status {
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 5px;
+    color: #a8bdcb;
+    font-size: 11px;
+  }
+  #section-audio-signal { color: #ffffff; font-weight: 700; }
+  #section-audio-status-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 900px) {
+    #section-audio-panel { left: 18px; right: 18px; bottom: 10px; min-height: 170px; }
+    .section-audio-top { align-items: flex-start; }
+    #section-audio-carriers button { padding: 3px 5px; }
+    #section-audio-status-note { display: none; }
+  }
+  @media (max-height: 720px) {
+    #section-audio-panel { min-height: 150px; padding-top: 6px; padding-bottom: 6px; }
+    #section-audio-waveform-wrap { height: 64px; }
+    #section-audio-subtitle { display: none; }
+  }
+
   #signal-tubes-carrier .filter-option {
     border-width: 2px;
     border-style: solid;
@@ -385,6 +519,34 @@
     </svg>
     <div id="section-signal-legend"><span class="sq"></span><span>=10s</span></div>
     <div id="flight-signal-tooltip" role="tooltip"></div>
+    <section id="section-audio-panel" aria-label="Signal-controlled music" hidden>
+      <div class="section-audio-top">
+        <div class="section-audio-heading">
+          <strong id="section-audio-title">Signal-controlled music</strong>
+          <span id="section-audio-subtitle">Select a flight or subway route</span>
+        </div>
+        <div id="section-audio-carriers" role="group" aria-label="Subway music carrier" hidden></div>
+      </div>
+      <div class="section-audio-controls">
+        <button id="section-audio-play" type="button" disabled>Play</button>
+        <div id="section-audio-waveform-wrap">
+          <div class="section-audio-wave-row">
+            <span class="section-audio-wave-label">Original</span>
+            <div class="section-audio-wave-track">
+              <canvas id="section-audio-waveform" aria-hidden="true"></canvas>
+            </div>
+          </div>
+          <input id="section-audio-seek" type="range" min="0" max="1000" value="0"
+                 aria-label="Music playback position">
+        </div>
+        <span id="section-audio-time">0:00 / 1:40</span>
+      </div>
+      <div class="section-audio-status">
+        <span id="section-audio-signal">Waiting for route signal</span>
+        <span id="section-audio-status-note">Raw steps: no smoothing, crossfade, or interpolation</span>
+      </div>
+      <audio id="section-audio" preload="metadata" src="/media/section-music.wav?format=pcm16-clip-53-153-v1"></audio>
+    </section>
   </div>
 
   <div id="planView">
@@ -546,6 +708,35 @@
     "120.8": "#8b5cf6",
     "121.7": "#18a36f"
   };
+  var sectionAudioPanel = document.getElementById("section-audio-panel");
+  var sectionAudioElement = document.getElementById("section-audio");
+  var sectionAudioPlayButton = document.getElementById("section-audio-play");
+  var sectionAudioSeek = document.getElementById("section-audio-seek");
+  var sectionAudioCanvas = document.getElementById("section-audio-waveform");
+  var sectionAudioTitle = document.getElementById("section-audio-title");
+  var sectionAudioSubtitle = document.getElementById("section-audio-subtitle");
+  var sectionAudioTime = document.getElementById("section-audio-time");
+  var sectionAudioSignal = document.getElementById("section-audio-signal");
+  var sectionAudioCarriers = document.getElementById("section-audio-carriers");
+  var SectionAudioProviders = ["AVERAGE", "Verizon", "AT&T", "T-Mobile", "Sprint"];
+  var SectionAudioProviderLabels = {
+    AVERAGE: "Average", Verizon: "Verizon", "AT&T": "AT&T", "T-Mobile": "T-Mobile", Sprint: "Sprint"
+  };
+  var SectionAudioProviderColors = {
+    AVERAGE: "#ffffff", Verizon: "#ee0000", "AT&T": "#0088ce", "T-Mobile": "#e20074", Sprint: "#ffdd00"
+  };
+  var sectionAudioProvider = "AVERAGE";
+  var sectionAudioEnvelope = [];
+  var sectionAudioWaveformPeaks = [];
+  var sectionAudioDuration = 100;
+  var sectionAudioSelectionKey = null;
+  var sectionAudioStepIndex = -1;
+  var sectionAudioLastValidStep = null;
+  var sectionAudioAnimationFrame = null;
+  var sectionAudioContext = null;
+  var sectionAudioSourceNode = null;
+  var sectionAudioFilterNode = null;
+  var sectionAudioGainNode = null;
 
   function setSectionSignalLayout(layout) {
     if (layout !== "along-route" && layout !== "separate-plot") return;
@@ -861,7 +1052,7 @@
     return out.length ? out : null;
   }
 
-  function renderSubwayProfile(w, h, groundTop) {
+  function renderSubwayProfile(w, h, groundTop, chartBottom) {
     if (!activeRouteId) return "";
     var routeId = activeRouteId;
     var route = routes.filter(function (r) { return r.id === routeId; })[0];
@@ -875,6 +1066,9 @@
 
     // ---- Band 1: height relative to street level ----
     var depthBandHeight = Math.max(120, h * 0.26);
+    if (Number.isFinite(chartBottom)) {
+      depthBandHeight = Math.min(depthBandHeight, Math.max(120, chartBottom - groundTop - 156));
+    }
     if (profile && profile.length > 1) {
       var totalDist = profile[profile.length - 1].dist_along_route_m || 1;
       // Preserve the source route profile in meters and convert only the Section View scale.
@@ -920,7 +1114,9 @@
 
     // ---- Band 2: carrier signal strength ----
     var signalTop = groundTop + depthBandHeight + 66;
-    var signalBottom = Math.max(signalTop + 90, h - 70);
+    var signalBottom = Number.isFinite(chartBottom)
+      ? Math.max(signalTop + 70, chartBottom)
+      : Math.max(signalTop + 90, h - 70);
     var signalHeight = signalBottom - signalTop;
 
     var series = {};
@@ -946,14 +1142,16 @@
         return x.toFixed(1) + "," + y.toFixed(1);
       }).join(" ");
       var carrierColor = SpindleProviderColors[carrier] || White;
+      var isAudioCarrier = carrier === sectionAudioProvider;
       markup += '<polyline points="' + pts + '" fill="none" stroke="' + carrierColor +
-        '" stroke-width="' + (carrier === "AVERAGE" ? 2.5 : 1.6) + '" opacity="' +
-        (carrier === "AVERAGE" ? 1 : 0.85) + '"></polyline>';
+        '" stroke-width="' + (isAudioCarrier ? 3.5 : (carrier === "AVERAGE" ? 2.2 : 1.6)) +
+        '" opacity="' + (isAudioCarrier ? 1 : 0.55) + '"></polyline>';
       // Legend swatch
       var lx = plotLeft + ci * 108;
       markup += '<line x1="' + lx + '" y1="' + (signalBottom + 24) + '" x2="' + (lx + 18) +
         '" y2="' + (signalBottom + 24) + '" stroke="' + carrierColor + '" stroke-width="3"></line>';
-      markup += '<text x="' + (lx + 24) + '" y="' + (signalBottom + 28) + '" font-size="11">' +
+      markup += '<text x="' + (lx + 24) + '" y="' + (signalBottom + 28) + '" font-size="11"' +
+        (isAudioCarrier ? ' font-weight="700"' : '') + '>' +
         escapeXml(SpindleProviderLabels[carrier] || carrier) + '</text>';
     });
 
@@ -1192,9 +1390,412 @@
     return Number.isFinite(number) ? number.toFixed(digits) + (suffix || "") : "Unavailable";
   }
 
+  // ---- Section signal-controlled music --------------------------------------
+  // The source signal remains discrete. Each route sample is a hard step: gain,
+  // filter cutoff, and playback rate are assigned immediately, with no ramping,
+  // interpolation, crossfade, or synthetic samples between the source values.
+  function sectionAudioKey() {
+    if (activeRouteId) return "subway:" + activeRouteId;
+    if (activeSectionFlight && activeSectionFlight.icao24) {
+      return "flight:" + String(activeSectionFlight.icao24).toLowerCase();
+    }
+    return null;
+  }
+
+  function formatSectionAudioTime(value) {
+    var seconds = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+    return Math.floor(seconds / 60) + ":" + String(Math.floor(seconds % 60)).padStart(2, "0");
+  }
+
+  function pauseSectionAudio(reset) {
+    sectionAudioElement.pause();
+    if (reset) {
+      try { sectionAudioElement.currentTime = 0; } catch (error) { /* metadata not loaded yet */ }
+      sectionAudioSeek.value = "0";
+      sectionAudioStepIndex = -1;
+      sectionAudioLastValidStep = null;
+    }
+    if (sectionAudioAnimationFrame != null) {
+      cancelAnimationFrame(sectionAudioAnimationFrame);
+      sectionAudioAnimationFrame = null;
+    }
+    sectionAudioPlayButton.textContent = "Play";
+  }
+
+  function syncSectionAudioCarrierButtons() {
+    Array.prototype.forEach.call(sectionAudioCarriers.children, function (button) {
+      var provider = button.getAttribute("data-section-audio-provider");
+      var selected = provider === sectionAudioProvider;
+      var color = SectionAudioProviderColors[provider] || "#ffffff";
+      button.setAttribute("aria-pressed", String(selected));
+      button.style.borderColor = color;
+      button.style.background = selected ? color : "rgba(255,255,255,0.06)";
+      button.style.color = selected && (provider === "AVERAGE" || provider === "Sprint")
+        ? "#07111c"
+        : (selected ? "#ffffff" : color);
+    });
+  }
+
+  function syncSectionAudioPanel() {
+    var key = sectionAudioKey();
+    if (key !== sectionAudioSelectionKey) {
+      pauseSectionAudio(true);
+      sectionAudioSelectionKey = key;
+      sectionAudioEnvelope = [];
+      sectionAudioSignal.textContent = key ? "Waiting for route signal" : "Waiting for route selection";
+    }
+    sectionAudioPanel.hidden = !key;
+    if (!key) return;
+
+    var detailsOpen = document.getElementById("details-panel").classList.contains("open");
+    sectionAudioPanel.style.right = window.innerWidth <= 900 ? "18px" : (detailsOpen ? "430px" : "80px");
+    sectionAudioCarriers.hidden = !activeRouteId;
+    if (activeRouteId) {
+      sectionAudioTitle.textContent = activeRouteId + " subway signal music";
+      sectionAudioSubtitle.textContent = SectionAudioProviderLabels[sectionAudioProvider] +
+        " signal · 100 raw steps · music excerpt 0:53–2:33";
+    } else {
+      sectionAudioTitle.textContent = String(
+        activeSectionFlight.callsign || activeSectionFlight.icao24.toUpperCase()
+      ).trim() + " flight signal music";
+      sectionAudioSubtitle.textContent =
+        "Selected-flight V2 modeled relative signal · raw steps · music excerpt 0:53–2:33";
+    }
+    syncSectionAudioCarrierButtons();
+  }
+
+  function refreshSectionAudioEnvelope(force) {
+    if (sectionAudioPanel.hidden) {
+      sectionAudioEnvelope = [];
+      sectionAudioPlayButton.disabled = true;
+      return;
+    }
+    // A playing flight uses a stable snapshot of the route that was visible when Play was
+    // pressed. Subway carrier changes explicitly force an immediate envelope replacement.
+    if (!force && !sectionAudioElement.paused && sectionAudioEnvelope.length) return;
+
+    var envelope = [];
+    if (activeRouteId) {
+      var values = subwaySignalSeries(activeRouteId, sectionAudioProvider) || [];
+      envelope = values.map(function (value, index) {
+        var raw = Number(value);
+        return {
+          position: index / Math.max(1, values.length),
+          available: Number.isFinite(raw),
+          strength: Number.isFinite(raw) ? Math.max(0, Math.min(1, raw / 100)) : 0,
+          rawValue: Number.isFinite(raw) ? raw : null,
+          label: SectionAudioProviderLabels[sectionAudioProvider],
+          color: SectionAudioProviderColors[sectionAudioProvider] || "#ffffff"
+        };
+      });
+      sectionAudioSubtitle.textContent = SectionAudioProviderLabels[sectionAudioProvider] +
+        " signal · " + values.length + " raw steps · music excerpt 0:53–2:33";
+    } else if (activeSectionFlight) {
+      var firstX = sectionSignalRenderSamples.length ? sectionSignalRenderSamples[0].baseX : 0;
+      var lastX = sectionSignalRenderSamples.length
+        ? sectionSignalRenderSamples[sectionSignalRenderSamples.length - 1].baseX
+        : firstX;
+      var spanX = Math.max(1, lastX - firstX);
+      envelope = sectionSignalRenderSamples.map(function (sample, index) {
+        return {
+          position: sectionSignalRenderSamples.length === 1
+            ? 0
+            : Math.max(0, Math.min(1, (sample.baseX - firstX) / spanX)),
+          available: !!sample.hasLoss,
+          strength: sample.hasLoss ? sample.normalizedStrength : 0,
+          rawValue: sample.hasLoss ? sample.relativeDb : null,
+          label: "Flight relative signal",
+          color: sample.hasLoss ? sample.color : "#7d8790",
+          sourceIndex: index
+        };
+      });
+      sectionAudioSubtitle.textContent = "Selected-flight V2 modeled relative signal · " +
+        envelope.length + " raw steps · music excerpt 0:53–2:33";
+    }
+    sectionAudioEnvelope = envelope;
+    sectionAudioStepIndex = -1;
+    sectionAudioLastValidStep = null;
+    sectionAudioPlayButton.disabled = !envelope.some(function (step) { return step.available; });
+    if (sectionAudioPlayButton.disabled) {
+      sectionAudioSignal.textContent = activeRouteId ? "Waiting for subway signal data" : "Waiting for V2 signal history";
+    } else {
+      applySectionAudioStep(true);
+    }
+  }
+
+  function sectionAudioStepAtFromEnvelope(envelope, progress) {
+    if (!envelope.length) return { index: -1, step: null };
+    var target = Math.max(0, Math.min(1, progress));
+    var low = 0;
+    var high = envelope.length - 1;
+    while (high - low > 1) {
+      var middle = Math.floor((low + high) / 2);
+      if (envelope[middle].position <= target) low = middle;
+      else high = middle;
+    }
+    var index = envelope[high].position <= target ? high : low;
+    return { index: index, step: envelope[index] };
+  }
+
+  function sectionAudioStepAt(progress) {
+    return sectionAudioStepAtFromEnvelope(sectionAudioEnvelope, progress);
+  }
+
+  function sectionAudioParameters(step) {
+    var strength = step.strength;
+    return {
+      gain: 0.05 + 0.95 * strength,
+      cutoff: 300 + 15700 * strength * strength,
+      playbackRate: 0.75 + 0.25 * strength
+    };
+  }
+
+  function ensureSectionAudioGraph() {
+    if (sectionAudioContext) return;
+    var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error("Web Audio is not supported by this browser.");
+    sectionAudioContext = new AudioContextClass();
+    sectionAudioSourceNode = sectionAudioContext.createMediaElementSource(sectionAudioElement);
+    sectionAudioFilterNode = sectionAudioContext.createBiquadFilter();
+    sectionAudioFilterNode.type = "lowpass";
+    sectionAudioFilterNode.Q.value = 0.7;
+    sectionAudioFilterNode.frequency.value = 16000;
+    sectionAudioGainNode = sectionAudioContext.createGain();
+    sectionAudioGainNode.gain.value = 1;
+    sectionAudioSourceNode.connect(sectionAudioFilterNode);
+    sectionAudioFilterNode.connect(sectionAudioGainNode);
+    sectionAudioGainNode.connect(sectionAudioContext.destination);
+  }
+
+  function applySectionAudioStep(force) {
+    var duration = Number.isFinite(sectionAudioElement.duration)
+      ? sectionAudioElement.duration
+      : sectionAudioDuration;
+    var progress = duration > 0 ? sectionAudioElement.currentTime / duration : 0;
+    var current = sectionAudioStepAt(progress);
+    if (!current.step) return;
+    if (!force && current.index === sectionAudioStepIndex) return;
+    sectionAudioStepIndex = current.index;
+
+    if (!current.step.available) {
+      sectionAudioSignal.textContent = "Unavailable signal sample · holding the previous effect";
+      return;
+    }
+    sectionAudioLastValidStep = current.step;
+    var parameters = sectionAudioParameters(current.step);
+    var gain = parameters.gain;
+    var cutoff = parameters.cutoff;
+    var playbackRate = parameters.playbackRate;
+
+    // Direct value assignments are intentional: they create the requested discontinuities.
+    if (sectionAudioContext && sectionAudioGainNode && sectionAudioFilterNode) {
+      var now = sectionAudioContext.currentTime;
+      sectionAudioGainNode.gain.cancelScheduledValues(now);
+      sectionAudioFilterNode.frequency.cancelScheduledValues(now);
+      sectionAudioGainNode.gain.setValueAtTime(gain, now);
+      sectionAudioFilterNode.frequency.setValueAtTime(cutoff, now);
+    }
+    sectionAudioElement.playbackRate = playbackRate;
+    sectionAudioSignal.textContent = activeRouteId
+      ? current.step.label + ": " + current.step.rawValue.toFixed(1) + "/100 · gain " + gain.toFixed(2) +
+        " · " + Math.round(cutoff) + " Hz · " + playbackRate.toFixed(2) + "×"
+      : "Relative signal: " + current.step.rawValue.toFixed(2) + " dB · gain " + gain.toFixed(2) +
+        " · " + Math.round(cutoff) + " Hz · " + playbackRate.toFixed(2) + "×";
+  }
+
+  function drawSectionAudioWaveTrack(canvas, peaks, envelope, progress) {
+    var bounds = canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    var ratio = window.devicePixelRatio || 1;
+    var pixelWidth = Math.max(1, Math.round(bounds.width * ratio));
+    var pixelHeight = Math.max(1, Math.round(bounds.height * ratio));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    var context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    var width = bounds.width;
+    var height = bounds.height;
+    context.clearRect(0, 0, width, height);
+
+    if (peaks.length) {
+      context.lineWidth = 1;
+      var activeColor = null;
+      peaks.forEach(function (peak, index) {
+        var sampleProgress = index / Math.max(1, peaks.length - 1);
+        var color = "rgba(168, 189, 203, 0.72)";
+        if (color !== activeColor) {
+          if (activeColor != null) context.stroke();
+          context.beginPath();
+          context.strokeStyle = color;
+          activeColor = color;
+        }
+        var x = sampleProgress * width;
+        var amplitude = Math.max(1, peak * height * 0.43);
+        context.moveTo(x, height / 2 - amplitude);
+        context.lineTo(x, height / 2 + amplitude);
+      });
+      if (activeColor != null) context.stroke();
+    }
+
+    // Draw the same discrete signal steps that control the audio. Horizontal segments
+    // show each held value; vertical segments mark the exact unsmoothed change points.
+    envelope.forEach(function (step, index) {
+      var next = envelope[index + 1];
+      var x1 = Math.max(0, Math.min(width, step.position * width));
+      var x2 = Math.max(x1, Math.min(width, (next ? next.position : 1) * width));
+      var y1 = step.available ? height - 4 - step.strength * (height - 8) : height / 2;
+      context.strokeStyle = step.available ? step.color : "#7d8790";
+      context.globalAlpha = 0.92;
+      context.lineWidth = 2;
+      context.setLineDash(step.available ? [] : [5, 4]);
+      context.beginPath();
+      context.moveTo(x1, y1);
+      context.lineTo(x2, y1);
+      if (next) {
+        var y2 = next.available ? height - 4 - next.strength * (height - 8) : height / 2;
+        context.lineTo(x2, y2);
+      }
+      context.stroke();
+    });
+    context.globalAlpha = 1;
+    context.setLineDash([]);
+
+    context.strokeStyle = "#ffffff";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(progress * width, 0);
+    context.lineTo(progress * width, height);
+    context.stroke();
+  }
+
+  function drawSectionAudioWaveform() {
+    if (sectionAudioPanel.hidden) return;
+    var duration = Number.isFinite(sectionAudioElement.duration)
+      ? sectionAudioElement.duration
+      : sectionAudioDuration;
+    var progress = duration > 0 ? Math.max(0, Math.min(1, sectionAudioElement.currentTime / duration)) : 0;
+    drawSectionAudioWaveTrack(sectionAudioCanvas, sectionAudioWaveformPeaks, sectionAudioEnvelope, progress);
+    sectionAudioSeek.value = String(Math.round(progress * 1000));
+    sectionAudioTime.textContent = formatSectionAudioTime(sectionAudioElement.currentTime) + " / " +
+      formatSectionAudioTime(duration);
+  }
+
+  function sectionAudioTick() {
+    applySectionAudioStep(false);
+    drawSectionAudioWaveform();
+    if (!sectionAudioElement.paused && !sectionAudioElement.ended) {
+      sectionAudioAnimationFrame = requestAnimationFrame(sectionAudioTick);
+    } else {
+      sectionAudioAnimationFrame = null;
+    }
+  }
+
+  function setSectionAudioProvider(provider, fromSignalTube) {
+    if (SectionAudioProviders.indexOf(provider) === -1) return;
+    var changed = sectionAudioProvider !== provider;
+    sectionAudioProvider = provider;
+    syncSectionAudioCarrierButtons();
+    if (changed) {
+      refreshSectionAudioEnvelope(true);
+      applySectionAudioStep(true);
+      draw();
+    }
+    if (!fromSignalTube && typeof SpindleProvider !== "undefined" && SpindleProvider !== provider) {
+      var matchingTubeButton = document.querySelector('[data-spindle-provider="' + provider + '"]');
+      if (matchingTubeButton) matchingTubeButton.click();
+    }
+  }
+
+  SectionAudioProviders.forEach(function (provider) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.textContent = SectionAudioProviderLabels[provider];
+    button.setAttribute("data-section-audio-provider", provider);
+    button.addEventListener("click", function () { setSectionAudioProvider(provider, false); });
+    sectionAudioCarriers.appendChild(button);
+  });
+  syncSectionAudioCarrierButtons();
+
+  function toggleSectionAudioPlayback() {
+    if (sectionAudioPanel.hidden || sectionAudioPlayButton.disabled) return;
+    if (sectionAudioElement.paused) {
+      try {
+        refreshSectionAudioEnvelope(true);
+        ensureSectionAudioGraph();
+        sectionAudioContext.resume();
+        applySectionAudioStep(true);
+        sectionAudioElement.play().then(function () {
+          sectionAudioPlayButton.textContent = "Pause";
+          if (sectionAudioAnimationFrame == null) sectionAudioTick();
+        }).catch(function (error) {
+          sectionAudioSignal.textContent = "Audio could not play: " + error.message;
+        });
+      } catch (error) {
+        sectionAudioSignal.textContent = "Audio could not start: " + error.message;
+      }
+    } else {
+      pauseSectionAudio(false);
+      drawSectionAudioWaveform();
+    }
+  }
+
+  sectionAudioPlayButton.addEventListener("click", toggleSectionAudioPlayback);
+  document.addEventListener("keydown", function (event) {
+    if ((event.code !== "Space" && event.key !== " ") || event.repeat) return;
+    if (document.body.getAttribute("data-view-mode") !== "section" ||
+        sectionAudioPanel.hidden || sectionAudioPlayButton.disabled) return;
+    var target = event.target;
+    var tagName = target && target.tagName ? target.tagName.toLowerCase() : "";
+    if (target && (target.isContentEditable ||
+        tagName === "input" || tagName === "textarea" || tagName === "select" ||
+        tagName === "button" || tagName === "a")) return;
+    event.preventDefault();
+    toggleSectionAudioPlayback();
+  });
+
+  sectionAudioSeek.addEventListener("input", function () {
+    var duration = Number.isFinite(sectionAudioElement.duration)
+      ? sectionAudioElement.duration
+      : sectionAudioDuration;
+    sectionAudioElement.currentTime = Number(sectionAudioSeek.value) / 1000 * duration;
+    sectionAudioStepIndex = -1;
+    applySectionAudioStep(true);
+    drawSectionAudioWaveform();
+  });
+  sectionAudioElement.addEventListener("loadedmetadata", function () {
+    if (Number.isFinite(sectionAudioElement.duration)) sectionAudioDuration = sectionAudioElement.duration;
+    drawSectionAudioWaveform();
+  });
+  sectionAudioElement.addEventListener("pause", function () {
+    sectionAudioPlayButton.textContent = "Play";
+  });
+  sectionAudioElement.addEventListener("ended", function () {
+    pauseSectionAudio(true);
+    applySectionAudioStep(true);
+    drawSectionAudioWaveform();
+  });
+
+  fetch("assets/data/section-music-waveform.json")
+    .then(function (response) {
+      if (!response.ok) throw new Error("Waveform returned HTTP " + response.status);
+      return response.json();
+    })
+    .then(function (payload) {
+      sectionAudioWaveformPeaks = Array.isArray(payload.peaks) ? payload.peaks : [];
+      if (Number.isFinite(Number(payload.duration_seconds))) {
+        sectionAudioDuration = Number(payload.duration_seconds);
+      }
+      drawSectionAudioWaveform();
+    })
+    .catch(function (error) {
+      if (window.console && console.warn) console.warn("Section music waveform unavailable:", error);
+    });
+
   // Straighten the ground track from left to right while preserving altitude. The observed
   // route remains the baseline; a separate path-normal waveform shows modeled signal change.
-  function renderFlightAltitudeProfile(w, groundTop) {
+  function renderFlightAltitudeProfile(w, groundTop, chartBottom) {
     if (!activeSectionFlight || !activeSectionFlight.track) return "";
     var points = activeSectionFlight.track.filter(function (point) {
       return Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude));
@@ -1230,7 +1831,10 @@
     var plotRight = Math.max(plotLeft + 160, w - (detailsOpen ? 430 : 80));
     var separatePlot = sectionSignalLayout === "separate-plot";
     var plotTop = 195;
-    var plotBottom = Math.max(plotTop + (separatePlot ? 210 : 120), groundTop - 35);
+    var naturalPlotBottom = Math.max(plotTop + (separatePlot ? 210 : 120), groundTop - 35);
+    var plotBottom = Number.isFinite(chartBottom)
+      ? Math.max(plotTop + 90, Math.min(naturalPlotBottom, chartBottom))
+      : naturalPlotBottom;
     var plotWidth = plotRight - plotLeft;
     var plotHeight = plotBottom - plotTop;
     var chartGap = separatePlot ? 46 : 0;
@@ -1295,6 +1899,7 @@
           ? (hasLoss ? signalYAt(relativeDb) : signalPlotBottom)
           : yAt(sectionSignalAltitudeFt(point)),
         amplitude: hasLoss ? 6 + normalizedStrength * 30 : 5,
+        normalizedStrength: normalizedStrength,
         relativeDb: relativeDb,
         totalLoss: hasLoss ? totalLoss : null,
         hasLoss: hasLoss,
@@ -1521,6 +2126,10 @@
   function draw() {
     var w = window.innerWidth;
     var h = window.innerHeight;
+    syncSectionAudioPanel();
+    var sectionChartBottom = sectionAudioPanel.hidden
+      ? h - 70
+      : Math.max(300, sectionAudioPanel.offsetTop - 46);
     // A focused subway profile uses a street-level reference at 1/3 of the screen. Flight
     // charts retain the existing 2/3 layout reference without drawing a ground surface.
     var groundTop = h * (activeRouteId ? SubwayFocusGroundLocation : GroundLocation);
@@ -1540,9 +2149,11 @@
     groundLine.style.display = activeRouteId ? "" : "none";
 
     // Only a focused subway route owns this layer; otherwise it remains empty.
-    routeLines.innerHTML = activeRouteId ? renderSubwayProfile(w, h, groundTop) : "";
+    routeLines.innerHTML = activeRouteId ? renderSubwayProfile(w, h, groundTop, sectionChartBottom) : "";
     // Requirement: focusing a subway line hides every flight diagram in Section View.
-    flightProfile.innerHTML = activeRouteId ? "" : renderFlightAltitudeProfile(w, groundTop);
+    flightProfile.innerHTML = activeRouteId ? "" : renderFlightAltitudeProfile(w, groundTop, sectionChartBottom);
+    refreshSectionAudioEnvelope(false);
+    drawSectionAudioWaveform();
   }
 
   window.addEventListener("resize", draw);
@@ -2672,7 +3283,10 @@
           btn.style.color = accent;
         }
       }
-      btn.addEventListener("click", function () { setSpindleProvider(id); });
+      btn.addEventListener("click", function () {
+        setSpindleProvider(id);
+        if (id !== "ALL") setSectionAudioProvider(id, true);
+      });
       box.appendChild(btn);
     });
   })();
@@ -2994,6 +3608,7 @@
   // ======================================================================
 
   function setViewMode(mode) {
+    if (mode !== "section" && !sectionAudioElement.paused) pauseSectionAudio(false);
     sectionView.style.display = mode === "section" ? "block" : "none";
     planViewEl.style.display = mode === "plan" ? "block" : "none";
     threeDViewEl.style.display = mode === "3d" ? "block" : "none";

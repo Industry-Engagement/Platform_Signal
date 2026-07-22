@@ -21,6 +21,7 @@ FLIGHT_DATA_DIR = APP_DIR.parent
 PROJECT_ROOT = FLIGHT_DATA_DIR.parent
 DEFAULT_CREDENTIALS = FLIGHT_DATA_DIR / "credentials.json"
 PLANE_MODEL = FLIGHT_DATA_DIR / "DC8_AFRC_AIR_0824.glb"
+SECTION_MUSIC = PROJECT_ROOT / "music" / "section-music-browser-pcm16-clip-53-153.wav"
 PUBLIC_ROOT_NAMES = {"assets", "RouteShape", "Source"}
 PUBLIC_SUFFIXES = {
     ".css",
@@ -101,6 +102,8 @@ class TrackerRequestHandler(BaseHTTPRequestHandler):
             return PROJECT_ROOT / "index.html"
         if path == "/assets/plane.glb":
             return PLANE_MODEL
+        if path == "/media/section-music.wav":
+            return SECTION_MUSIC
         if "\\" in path or "\x00" in path:
             return None
         relative = Path(path.lstrip("/"))
@@ -128,18 +131,68 @@ class TrackerRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @staticmethod
+    def _parse_byte_range(value: str, size: int) -> tuple[int, int]:
+        """Parse one RFC 7233 byte range and return inclusive bounds."""
+        if size <= 0 or not value.startswith("bytes=") or "," in value:
+            raise ValueError("unsupported byte range")
+        spec = value[6:].strip()
+        if "-" not in spec:
+            raise ValueError("invalid byte range")
+        start_text, end_text = spec.split("-", 1)
+        if not start_text:
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                raise ValueError("invalid suffix range")
+            return max(0, size - suffix_length), size - 1
+        start = int(start_text)
+        end = int(end_text) if end_text else size - 1
+        if start < 0 or start >= size or end < start:
+            raise ValueError("unsatisfiable byte range")
+        return start, min(end, size - 1)
+
     def _send_file(self, path: Path) -> None:
-        body = path.read_bytes()
+        size = path.stat().st_size
+        start = 0
+        end = size - 1
+        partial = False
+        range_header = self.headers.get("Range")
+        if range_header:
+            try:
+                start, end = self._parse_byte_range(range_header, size)
+            except (TypeError, ValueError):
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", "0")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                return
+            partial = True
+
         content_type = "model/gltf-binary" if path.suffix.lower() == ".glb" else (
+            "audio/wav" if path.suffix.lower() == ".wav" else
             mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         )
-        self.send_response(HTTPStatus.OK)
+        content_length = end - start + 1
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if partial else HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Cache-Control", "public, max-age=86400" if path.suffix == ".glb" else "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(body)
+        with path.open("rb") as source:
+            source.seek(start)
+            remaining = content_length
+            while remaining:
+                chunk = source.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def log_message(self, format: str, *args: object) -> None:
         if self.path.startswith("/api/") and args and str(args[1]) == "200":
