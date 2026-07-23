@@ -3306,6 +3306,17 @@
   var pendingRefreshTimeout = null;
   var lastTrainHeadingByTripId = {};   // preserves direction for a train at its terminal stop
 
+  // Smooth-motion state. Trains no longer sit on their next station until the poll reports a
+  // new one; instead each trip carries a from/to distance-along-route plus a start/arrive time,
+  // and a ~1s tick interpolates the dot between them. Timing comes from the feed's predicted
+  // arrival timestamp; a fixed fallback covers trips whose feed entry lacks one.
+  var trainMotionByTripId = {};        // tripId -> { routeId, fromDist, toDist, startTime, arriveTime, nextStopId }
+  var TrainAnimationTickMs = 1000;     // how often the dot position is recomputed & re-rendered
+  var SpindleAnchorIntervalMs = 8000;  // how often the (expensive) signal tube re-anchors to its train
+  var FallbackSegmentMs = 90000;       // assumed station-to-station time when the feed has no prediction
+  var lastSpindleAnchorAt = 0;         // throttles the tube re-anchor in the animation tick
+  var trainAnimationStarted = false;
+
   var trainStopsPromise = null;   // cached so both train-dot placement and the Signal Spindle
                                    // (which also needs real station coordinates) share one fetch
   function loadTrainStops() {
@@ -3323,7 +3334,7 @@
   // Route focus and live-train selection share the same details panel used for flights.
   // Clicking a live train shows its details there
   // (rather than a maplibregl.Popup), and highlights that train as a larger white dot
-  // via the "selected" property baked into its GeoJSON feature (see trainsToGeoJSON).
+  // via the "selected" property baked into its GeoJSON feature (see computeTrainFeatures).
   // Selecting a train deselects any selected flight or whole route, and vice versa, so
   // only one owner -- flight, train, or subway route -- populates the panel at a time.
   var trainDetailsPanel = document.getElementById("details-panel");
@@ -3555,8 +3566,16 @@
   function ensureTrainPolling() {
     if (trainPollingStarted) return;
     trainPollingStarted = true;
+    // Load the route geometry up front so trains can interpolate along it (and reconcile motion)
+    // even before any signal tube is selected. loadSpindleData is memoized, so this is a no-op
+    // once the tube feature has already fetched it.
+    loadSpindleData().catch(function () { /* geometry unavailable: trains fall back to static */ });
     requestRefresh();
     setInterval(requestRefresh, TrainPollIntervalMs);
+    if (!trainAnimationStarted) {
+      trainAnimationStarted = true;
+      setInterval(tickTrainAnimation, TrainAnimationTickMs);
+    }
   }
 
   // Every actual network refresh -- whether from the recurring poll or from a route just
@@ -3603,7 +3622,11 @@
         routeId: tu.trip.route_id,
         tripId: tu.trip.trip_id,
         nextStopId: next.stop_id,
-        followingStopId: following ? following.stop_id : null
+        followingStopId: following ? following.stop_id : null,
+        // Predicted arrival/departure at the next stop, in ms. Drives the smooth interpolation
+        // (see reconcileTrainMotion); null when the feed omits a prediction for this trip.
+        nextArrival: next.arrival && next.arrival.time ? Number(next.arrival.time) * 1000 : null,
+        nextDeparture: next.departure && next.departure.time ? Number(next.departure.time) * 1000 : null
       });
     }
     return out;
@@ -3671,7 +3694,30 @@
     return best;
   }
 
-  function trainsToGeoJSON(trains) {
+  // The train's interpolated [lon, lat] and heading at time `atTime`, using its motion state
+  // (from/to distance-along-route + start/arrive time). Returns null when there is no motion
+  // state or route geometry, so the caller can fall back to the static next-stop placement.
+  function interpolatedTrainPose(t, atTime) {
+    var m = trainMotionByTripId[t.tripId];
+    if (!m) return null;
+    var data = SpindleDataByRoute[t.routeId];
+    if (!data) return null;
+    var span = m.arriveTime - m.startTime;
+    var frac = span > 0 ? (atTime - m.startTime) / span : 1;
+    frac = Math.max(0, Math.min(1, frac));
+    var dist = m.fromDist + (m.toDist - m.fromDist) * frac;
+    var s = pointAtDistance(data, dist);
+    var lon = s.east / data.mPerDegLon;
+    var lat = -s.south / data.mPerDegLat;
+    // Bearing clockwise from north from the path tangent (north = -south component). The
+    // stored geometry is ordered one way along the line; a train whose toDist < fromDist is
+    // running against that ordering, so flip 180deg to face its real direction of travel.
+    var heading = (Math.atan2(s.tE, -s.tS) * 180 / Math.PI + 360) % 360;
+    if (m.toDist < m.fromDist) heading = (heading + 180) % 360;
+    return { coordinates: [lon, lat], heading: heading };
+  }
+
+  function computeTrainFeatures(trains, atTime) {
     var seen = {};
     var features = [];
     trains.forEach(function (t) {
@@ -3680,18 +3726,29 @@
       var stopId = (t.nextStopId || "").replace(/[NS]$/, "");
       var stop = TrainStops[stopId];
       if (!stop) return;   // no coordinates for this stop, skip
-      var followingId = (t.followingStopId || "").replace(/[NS]$/, "");
-      var followingStop = TrainStops[followingId];
-      var desiredHeading = bearingBetweenStops(stop, followingStop);
-      if (desiredHeading == null && lastTrainHeadingByTripId[t.tripId] != null) {
-        desiredHeading = lastTrainHeadingByTripId[t.tripId];
+
+      var moving = interpolatedTrainPose(t, atTime);
+      var coordinates, heading;
+      if (moving) {
+        coordinates = moving.coordinates;
+        heading = moving.heading;
+      } else {
+        // No motion state / geometry yet: place statically on the next stop, heading from the
+        // next->following bearing projected onto the route (original behavior).
+        var followingId = (t.followingStopId || "").replace(/[NS]$/, "");
+        var followingStop = TrainStops[followingId];
+        var desiredHeading = bearingBetweenStops(stop, followingStop);
+        if (desiredHeading == null && lastTrainHeadingByTripId[t.tripId] != null) {
+          desiredHeading = lastTrainHeadingByTripId[t.tripId];
+        }
+        var pose = nearestTrainRoutePose(t.routeId, [stop.lon, stop.lat], desiredHeading);
+        coordinates = [stop.lon, stop.lat];
+        heading = pose && pose.heading != null ? pose.heading : (desiredHeading == null ? 0 : desiredHeading);
       }
-      var pose = nearestTrainRoutePose(t.routeId, [stop.lon, stop.lat], desiredHeading);
-      var heading = pose && pose.heading != null ? pose.heading : (desiredHeading == null ? 0 : desiredHeading);
       lastTrainHeadingByTripId[t.tripId] = heading;
       features.push({
         type: "Feature",
-        geometry: { type: "Point", coordinates: [stop.lon, stop.lat] },
+        geometry: { type: "Point", coordinates: coordinates },
         properties: {
           route: t.routeId, tripId: t.tripId, color: TrainColors[t.routeId] || NA, nextStop: stop.name,
           selected: t.tripId === selectedTrainTripId, heading: heading
@@ -3724,8 +3781,69 @@
         });
       });
       if (receivedAnyFeed) lastTrainSourceUpdateAt = Date.now();
+      reconcileTrainMotion();
       renderTrains();
     }).catch(function () { /* feed(s) unavailable this cycle */ });
+  }
+
+  // Reconciles the smooth-motion state against the freshly fetched cache. For each running
+  // trip it sets where the dot should glide from, to, and over what time window, using the
+  // route geometry (SpindleDataByRoute) and the feed's predicted arrival time.
+  function reconcileTrainMotion() {
+    var now = Date.now();
+    var live = {};
+    Object.keys(lastFetchedTrainsByRoute).forEach(function (routeId) {
+      lastFetchedTrainsByRoute[routeId].forEach(function (t) {
+        var data = SpindleDataByRoute[t.routeId];
+        if (!data) return;   // no geometry for this route: leave it to the static fallback
+        var stopId = (t.nextStopId || "").replace(/[NS]$/, "");
+        var stop = TrainStops[stopId];
+        if (!stop) return;
+        live[t.tripId] = true;
+        var toDist = nearestDistanceAlongPath(data, [stop.lon, stop.lat]);
+        var arriveTime = t.nextArrival || (now + FallbackSegmentMs);
+        var prev = trainMotionByTripId[t.tripId];
+        if (prev && prev.nextStopId === t.nextStopId) {
+          // Still heading to the same station: keep gliding from where we started, but adopt
+          // the freshest target position and predicted arrival (which the feed keeps revising).
+          prev.toDist = toDist;
+          prev.arriveTime = arriveTime;
+          prev.routeId = t.routeId;
+        } else if (prev) {
+          // Advanced to a new next stop: the station it just left becomes the new origin.
+          trainMotionByTripId[t.tripId] = {
+            routeId: t.routeId, fromDist: prev.toDist, toDist: toDist,
+            startTime: now, arriveTime: arriveTime, nextStopId: t.nextStopId
+          };
+        } else {
+          // First sighting: park it on the next station until we observe a transition, then glide.
+          trainMotionByTripId[t.tripId] = {
+            routeId: t.routeId, fromDist: toDist, toDist: toDist,
+            startTime: now, arriveTime: arriveTime, nextStopId: t.nextStopId
+          };
+        }
+      });
+    });
+    // Drop state for trips that have finished / dropped out, so the map doesn't leak entries.
+    Object.keys(trainMotionByTripId).forEach(function (tripId) {
+      if (!live[tripId]) delete trainMotionByTripId[tripId];
+    });
+  }
+
+  // Broadcasts the current train featureCollection. integrated-flight-tracker.js listens for
+  // this to drive the deck.gl "subway-train-models" ScenegraphLayer -- the literal 3D train
+  // models -- so it has to fire every time the dots' positions change (both the 15s network
+  // poll via renderTrains, and the 1s smooth-motion tick via tickTrainAnimation), not just on
+  // real fetches, or the models would sit frozen between polls while the dots glide past them.
+  function dispatchSubwaysUpdated(geojson, allGeojson) {
+    document.dispatchEvent(new CustomEvent("platform:subways-updated", {
+      detail: {
+        count: allGeojson.features.length,
+        visibleRoutes: Object.keys(TrainColors).filter(function (routeId) { return selectedRoutes[routeId]; }),
+        updatedAt: lastTrainSourceUpdateAt,
+        featureCollection: geojson
+      }
+    }));
   }
 
   // Renders whatever is currently selected from the last-fetched cache -- no network call.
@@ -3738,20 +3856,14 @@
       allTrains = allTrains.concat(lastFetchedTrainsByRoute[routeId]);
       if (selectedRoutes[routeId]) trains = trains.concat(lastFetchedTrainsByRoute[routeId]);
     });
-    var geojson = trainsToGeoJSON(trains);
-    var allGeojson = trainsToGeoJSON(allTrains);
+    var now = Date.now();
+    var geojson = computeTrainFeatures(trains, now);
+    var allGeojson = computeTrainFeatures(allTrains, now);
     var source = planMap && planMap.getSource("live-trains");
     if (source) source.setData(geojson);
     var threeDSource = threeDMap && threeDMap.getSource("three-d-live-trains");
     if (threeDSource) threeDSource.setData(geojson);
-    document.dispatchEvent(new CustomEvent("platform:subways-updated", {
-      detail: {
-        count: allGeojson.features.length,
-        visibleRoutes: Object.keys(TrainColors).filter(function (routeId) { return selectedRoutes[routeId]; }),
-        updatedAt: lastTrainSourceUpdateAt,
-        featureCollection: geojson
-      }
-    }));
+    dispatchSubwaysUpdated(geojson, allGeojson);
 
     // If the train shown in the details panel dropped out of the visible set (its route was
     // hidden, or it finished its run), close the panel rather than leave it showing a train
@@ -3779,11 +3891,59 @@
       })[0];
       if (stillRunning) {
         showSpindleSegment(activeSpindleRouteId, stillRunning.geometry.coordinates);
+        lastSpindleAnchorAt = Date.now();   // so the tick doesn't immediately rebuild again
       } else {
         activeSpindleTripId = null;
         activeSpindleRouteId = null;
         activeSpindleLonLat = null;
         clearSpindleSegment();
+      }
+    }
+  }
+
+  // The ~1s smooth-motion tick: recomputes every visible train's interpolated position from the
+  // cached feed data (no network) and re-renders the dots, so they glide between stations instead
+  // of only moving on the 15s poll. The signal tube follows on a slower throttle to stay light.
+  function tickTrainAnimation() {
+    var now = Date.now();
+    var trains = [];
+    var allTrains = [];
+    Object.keys(lastFetchedTrainsByRoute).forEach(function (routeId) {
+      allTrains = allTrains.concat(lastFetchedTrainsByRoute[routeId]);
+      if (selectedRoutes[routeId]) trains = trains.concat(lastFetchedTrainsByRoute[routeId]);
+    });
+    var geojson = computeTrainFeatures(trains, now);
+    var allGeojson = computeTrainFeatures(allTrains, now);
+    var source = planMap && planMap.getSource("live-trains");
+    if (source) source.setData(geojson);
+    var threeDSource = threeDMap && threeDMap.getSource("three-d-live-trains");
+    if (threeDSource) threeDSource.setData(geojson);
+    // Drives the deck.gl 3D train models (see dispatchSubwaysUpdated) in lockstep with the
+    // MapLibre circle dots, instead of only jumping on the 15s poll.
+    dispatchSubwaysUpdated(geojson, allGeojson);
+
+    // Keep the selected train's camera target / details panel anchor on its gliding position.
+    if (selectedTrainTripId) {
+      var selectedFeature = geojson.features.filter(function (f) {
+        return f.properties.tripId === selectedTrainTripId;
+      })[0];
+      if (selectedFeature) {
+        selectedTrainLonLat = selectedFeature.geometry.coordinates.slice(0, 2);
+        if (Number.isFinite(Number(selectedFeature.properties.heading))) {
+          selectedTrainHeading = Number(selectedFeature.properties.heading);
+        }
+      }
+    }
+
+    // Re-anchor the (expensive) signal tube to its train, but only every SpindleAnchorIntervalMs.
+    // Clearing a finished train's tube stays in renderTrains, which runs on the network poll.
+    if (activeSpindleTripId && now - lastSpindleAnchorAt >= SpindleAnchorIntervalMs) {
+      var tubeFeature = geojson.features.filter(function (f) {
+        return f.properties.tripId === activeSpindleTripId;
+      })[0];
+      if (tubeFeature) {
+        showSpindleSegment(activeSpindleRouteId, tubeFeature.geometry.coordinates);
+        lastSpindleAnchorAt = now;
       }
     }
   }
@@ -4405,7 +4565,7 @@
     Object.keys(lastFetchedTrainsByRoute).forEach(function (routeId) {
       if (selectedRoutes[routeId]) trains = trains.concat(lastFetchedTrainsByRoute[routeId]);
     });
-    return trainsToGeoJSON(trains).features.filter(function (feature) {
+    return computeTrainFeatures(trains, Date.now()).features.filter(function (feature) {
       return SpindleRouteIds.indexOf(feature.properties.route) !== -1;
     });
   }
