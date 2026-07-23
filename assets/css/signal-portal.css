@@ -1,0 +1,631 @@
+:root {
+  --signal-portal-ink: #f4f8fb;
+  --signal-portal-muted: rgba(196, 218, 232, 0.62);
+  --signal-portal-faint: rgba(159, 201, 226, 0.22);
+  --signal-portal-cyan: #69e0ff;
+  --signal-portal-green: #2ed47a;
+  --signal-portal-orange: #ff9a42;
+  --signal-portal-transition: 1400ms;
+}
+
+.signal-portal,
+.signal-portal * {
+  box-sizing: border-box;
+}
+
+.signal-portal {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-width: 280px;
+  min-height: 520px;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--signal-portal-ink);
+  background:
+    radial-gradient(circle at 50% 43%, rgba(22, 90, 125, 0.26), transparent 34%),
+    radial-gradient(circle at 50% 105%, rgba(15, 115, 137, 0.20), transparent 43%),
+    linear-gradient(160deg, #020811 0%, #041222 48%, #020913 100%);
+  font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: 50% 50%;
+}
+
+.signal-portal[hidden] {
+  display: none;
+}
+
+.signal-portal::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.25;
+  background-image:
+    linear-gradient(rgba(105, 224, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(105, 224, 255, 0.035) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(to bottom, transparent 2%, black 32%, black 72%, transparent 98%);
+}
+
+.signal-portal::after {
+  content: "";
+  position: absolute;
+  z-index: 8;
+  inset: -25%;
+  pointer-events: none;
+  opacity: 0.16;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 3px,
+    rgba(184, 233, 255, 0.12) 4px
+  );
+  mix-blend-mode: soft-light;
+}
+
+#signal-portal-canvas,
+.signal-portal-atmosphere {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#signal-portal-canvas {
+  z-index: -2;
+  touch-action: none;
+}
+
+.signal-portal-atmosphere {
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.signal-portal-halo {
+  position: absolute;
+  border: 1px solid rgba(105, 224, 255, 0.14);
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 80px rgba(105, 224, 255, 0.035),
+    0 0 80px rgba(105, 224, 255, 0.035);
+}
+
+.signal-portal-halo-one {
+  top: 50%;
+  left: 50%;
+  width: min(70vw, 920px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  animation: signal-portal-halo 9s ease-in-out infinite;
+}
+
+.signal-portal-halo-two {
+  top: 50%;
+  left: 50%;
+  width: min(47vw, 620px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  animation: signal-portal-halo 7s 1.5s ease-in-out infinite reverse;
+}
+
+.signal-portal-scan {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(58vw, 760px);
+  height: 1px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, rgba(105, 224, 255, 0.55), transparent 85%);
+  box-shadow: 0 0 16px rgba(105, 224, 255, 0.28);
+  animation: signal-portal-scan 13s linear infinite;
+}
+
+.signal-portal-header,
+.signal-portal-footer {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding-right: clamp(20px, 3.2vw, 52px);
+  padding-left: clamp(20px, 3.2vw, 52px);
+}
+
+.signal-portal-header {
+  padding-top: clamp(20px, 3vw, 44px);
+}
+
+.signal-portal-footer {
+  align-items: flex-end;
+  padding-bottom: clamp(20px, 3vw, 42px);
+}
+
+.signal-portal-index,
+.signal-portal-connection {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--signal-portal-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.signal-portal-index-mark,
+.signal-portal-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--signal-portal-cyan);
+  box-shadow: 0 0 16px rgba(105, 224, 255, 0.75);
+}
+
+.signal-portal-index-separator {
+  width: 28px;
+  height: 1px;
+  background: rgba(196, 218, 232, 0.30);
+}
+
+.signal-portal-status-dot {
+  background: #718391;
+  box-shadow: 0 0 0 4px rgba(113, 131, 145, 0.12);
+  transition: background-color 300ms ease, box-shadow 300ms ease;
+}
+
+.signal-portal-status-dot.is-online {
+  background: var(--signal-portal-green);
+  box-shadow:
+    0 0 0 4px rgba(46, 212, 122, 0.12),
+    0 0 17px rgba(46, 212, 122, 0.55);
+}
+
+.signal-portal-status-dot.is-error {
+  background: #ff6b6b;
+  box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.13);
+}
+
+.signal-portal-center {
+  position: relative;
+  z-index: 10;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(900px, calc(100vw - 40px));
+  margin: 0 auto;
+  text-align: center;
+  transform: translateY(-1vh);
+}
+
+.signal-portal-kicker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 2.2vw, 28px);
+  margin-bottom: clamp(4px, 1vw, 12px);
+  color: rgba(166, 207, 230, 0.48);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.signal-portal-logo-frame {
+  position: relative;
+  width: min(680px, 84vw);
+  height: clamp(170px, 23vw, 245px);
+  overflow: hidden;
+}
+
+.signal-portal-logo-frame::after {
+  content: "";
+  position: absolute;
+  right: 8%;
+  bottom: 0;
+  left: 8%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(105, 224, 255, 0.34), transparent);
+}
+
+.signal-portal-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0.95;
+  user-select: none;
+  pointer-events: none;
+}
+
+.signal-portal-subtitle {
+  margin: clamp(9px, 1.3vw, 17px) 0 0;
+  color: rgba(226, 240, 248, 0.84);
+  font-size: clamp(12px, 1.4vw, 17px);
+  font-weight: 400;
+  letter-spacing: clamp(0.08em, 0.75vw, 0.20em);
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.signal-portal-live {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: clamp(13px, 2vw, 24px);
+  margin-top: clamp(18px, 2.7vw, 32px);
+  padding: 10px 15px;
+  border: 1px solid rgba(178, 210, 231, 0.14);
+  border-radius: 999px;
+  background: rgba(6, 20, 33, 0.36);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.signal-portal-live > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.signal-portal-live-value {
+  color: rgba(241, 249, 253, 0.94);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.signal-portal-live-label {
+  color: rgba(166, 198, 218, 0.52);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.signal-portal-live-divider {
+  width: 1px;
+  background: rgba(178, 210, 231, 0.16);
+}
+
+.signal-portal-enter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-width: min(280px, 82vw);
+  margin-top: clamp(22px, 3vw, 38px);
+  padding: 15px 24px;
+  overflow: visible;
+  border: 1px solid rgba(105, 224, 255, 0.45);
+  border-radius: 999px;
+  color: #eefaff;
+  background: rgba(5, 26, 43, 0.64);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    0 0 40px rgba(105, 224, 255, 0.07);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 280ms ease,
+    background-color 280ms ease,
+    border-color 280ms ease,
+    box-shadow 280ms ease,
+    transform 280ms ease;
+}
+
+.signal-portal-enter::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: linear-gradient(110deg, transparent 30%, rgba(105, 224, 255, 0.13), transparent 70%);
+  transform: translateX(-115%);
+  transition: transform 650ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.signal-portal-enter:hover,
+.signal-portal-enter:focus-visible {
+  color: #ffffff;
+  border-color: rgba(105, 224, 255, 0.88);
+  background: rgba(12, 65, 88, 0.70);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 0 46px rgba(105, 224, 255, 0.18);
+  transform: translateY(-2px);
+}
+
+.signal-portal-enter:hover::before,
+.signal-portal-enter:focus-visible::before {
+  transform: translateX(115%);
+}
+
+.signal-portal-enter:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 4px;
+}
+
+.signal-portal-enter:disabled {
+  cursor: default;
+}
+
+.signal-portal-enter-orbit {
+  position: absolute;
+  inset: -7px;
+  border: 1px solid rgba(105, 224, 255, 0.16);
+  border-radius: inherit;
+  animation: signal-portal-button-breathe 3.2s ease-in-out infinite;
+}
+
+.signal-portal-enter-label,
+.signal-portal-enter-arrow {
+  position: relative;
+  z-index: 1;
+}
+
+.signal-portal-enter-arrow {
+  color: var(--signal-portal-cyan);
+  font-size: 17px;
+  line-height: 0;
+  transition: transform 280ms ease;
+}
+
+.signal-portal-enter:hover .signal-portal-enter-arrow,
+.signal-portal-enter:focus-visible .signal-portal-enter-arrow {
+  transform: translateX(5px);
+}
+
+.signal-portal-interaction-hint {
+  margin: 17px 0 0;
+  color: rgba(166, 198, 218, 0.36);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.signal-portal-credit {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: rgba(196, 218, 232, 0.44);
+  font-size: clamp(8px, 0.7vw, 10px);
+  font-weight: 500;
+  letter-spacing: 0.075em;
+  line-height: 1.35;
+}
+
+.signal-portal-credit-right {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.signal-portal-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.signal-portal.is-exiting {
+  pointer-events: none;
+  animation: signal-portal-exit var(--signal-portal-transition) cubic-bezier(0.76, 0, 0.24, 1) forwards;
+}
+
+.signal-portal.is-exiting .signal-portal-header,
+.signal-portal.is-exiting .signal-portal-footer,
+.signal-portal.is-exiting .signal-portal-kicker,
+.signal-portal.is-exiting .signal-portal-subtitle,
+.signal-portal.is-exiting .signal-portal-live,
+.signal-portal.is-exiting .signal-portal-interaction-hint {
+  animation: signal-portal-content-out 620ms ease forwards;
+}
+
+.signal-portal.is-exiting .signal-portal-logo-frame {
+  animation: signal-portal-logo-out 1050ms cubic-bezier(0.6, 0, 0.25, 1) forwards;
+}
+
+.signal-portal.is-exiting .signal-portal-enter {
+  animation: signal-portal-button-out 900ms cubic-bezier(0.45, 0, 0.55, 1) forwards;
+}
+
+.signal-portal.is-exiting .signal-portal-halo-one,
+.signal-portal.is-exiting .signal-portal-halo-two {
+  animation: signal-portal-ring-burst var(--signal-portal-transition) cubic-bezier(0.2, 0.7, 0.15, 1) forwards;
+}
+
+@keyframes signal-portal-halo {
+  0%, 100% { opacity: 0.38; transform: translate(-50%, -50%) scale(0.96); }
+  50% { opacity: 0.82; transform: translate(-50%, -50%) scale(1.03); }
+}
+
+@keyframes signal-portal-scan {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes signal-portal-button-breathe {
+  0%, 100% { opacity: 0.32; transform: scale(0.995); }
+  50% { opacity: 0.82; transform: scale(1.025); }
+}
+
+@keyframes signal-portal-exit {
+  0% { opacity: 1; transform: scale(1); filter: blur(0); }
+  55% { opacity: 1; transform: scale(1.025); filter: blur(0); }
+  100% { opacity: 0; transform: scale(1.12); filter: blur(8px); }
+}
+
+@keyframes signal-portal-content-out {
+  to { opacity: 0; transform: translateY(-12px); }
+}
+
+@keyframes signal-portal-logo-out {
+  0% { opacity: 1; transform: scale(1); filter: blur(0); }
+  55% { opacity: 0.82; transform: scale(1.04); filter: blur(1px); }
+  100% { opacity: 0; transform: scale(1.20); filter: blur(10px); }
+}
+
+@keyframes signal-portal-button-out {
+  0% { opacity: 1; transform: scale(1); }
+  45% { opacity: 1; transform: scale(1.05); background: rgba(105, 224, 255, 0.20); }
+  100% { opacity: 0; transform: scale(1.45); }
+}
+
+@keyframes signal-portal-ring-burst {
+  0% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.3); }
+}
+
+@media (max-width: 700px) {
+  .signal-portal {
+    min-height: 500px;
+  }
+
+  .signal-portal-header {
+    align-items: flex-start;
+  }
+
+  .signal-portal-index-separator,
+  .signal-portal-index span:last-child {
+    display: none;
+  }
+
+  .signal-portal-connection {
+    max-width: 48vw;
+    min-width: 0;
+    justify-content: flex-end;
+    text-align: right;
+    line-height: 1.45;
+  }
+
+  #signal-portal-status {
+    display: block;
+    max-width: 34vw;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .signal-portal-center {
+    transform: translateY(-0.5vh);
+  }
+
+  .signal-portal-logo-frame {
+    width: min(350px, 88vw);
+    height: clamp(135px, 47vw, 180px);
+  }
+
+  .signal-portal-logo {
+    width: 90%;
+    height: 100%;
+    margin-right: 5%;
+    margin-left: 5%;
+  }
+
+  .signal-portal-kicker {
+    gap: 11px;
+    font-size: 7px;
+  }
+
+  .signal-portal-kicker span:first-child,
+  .signal-portal-kicker span:nth-child(2) {
+    display: none;
+  }
+
+  .signal-portal-subtitle {
+    max-width: 340px;
+    letter-spacing: 0.12em;
+  }
+
+  .signal-portal-live {
+    gap: 12px;
+    padding: 9px 13px;
+  }
+
+  .signal-portal-live > div {
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .signal-portal-footer {
+    gap: 18px;
+  }
+
+  .signal-portal-credit {
+    width: 47%;
+    max-width: 47%;
+    min-width: 0;
+    font-size: 7px;
+    letter-spacing: 0.04em;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .signal-portal-credit span {
+    display: block;
+    width: 100%;
+  }
+
+  .signal-portal-interaction-hint {
+    font-size: 7px;
+  }
+}
+
+@media (max-height: 700px) and (min-width: 701px) {
+  .signal-portal-header {
+    padding-top: 18px;
+  }
+
+  .signal-portal-footer {
+    padding-bottom: 18px;
+  }
+
+  .signal-portal-center {
+    transform: translateY(-1vh) scale(0.88);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signal-portal-halo,
+  .signal-portal-scan,
+  .signal-portal-enter-orbit {
+    animation: none !important;
+  }
+
+  .signal-portal-enter,
+  .signal-portal-enter::before,
+  .signal-portal-enter-arrow {
+    transition-duration: 0.01ms !important;
+  }
+
+  .signal-portal.is-exiting {
+    animation-duration: 220ms !important;
+  }
+
+  .signal-portal.is-exiting .signal-portal-header,
+  .signal-portal.is-exiting .signal-portal-footer,
+  .signal-portal.is-exiting .signal-portal-kicker,
+  .signal-portal.is-exiting .signal-portal-subtitle,
+  .signal-portal.is-exiting .signal-portal-live,
+  .signal-portal.is-exiting .signal-portal-interaction-hint,
+  .signal-portal.is-exiting .signal-portal-logo-frame,
+  .signal-portal.is-exiting .signal-portal-enter {
+    animation-duration: 180ms !important;
+  }
+}

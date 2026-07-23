@@ -400,8 +400,106 @@
   }
 </style>
 <link rel="stylesheet" href="assets/css/integrated-interface.css">
+<link rel="stylesheet" href="assets/css/signal-portal.css">
 </head>
 <body>
+  <section class="signal-portal" id="signal-portal" role="dialog" aria-modal="true"
+           aria-labelledby="signal-portal-title" aria-describedby="signal-portal-subtitle"
+           data-transition-ms="1400">
+    <canvas id="signal-portal-canvas" aria-hidden="true"></canvas>
+    <div class="signal-portal-atmosphere" aria-hidden="true">
+      <span class="signal-portal-halo signal-portal-halo-one"></span>
+      <span class="signal-portal-halo signal-portal-halo-two"></span>
+      <span class="signal-portal-scan"></span>
+    </div>
+
+    <header class="signal-portal-header">
+      <div class="signal-portal-index">
+        <span class="signal-portal-index-mark" aria-hidden="true"></span>
+        <span>Signal Portal</span>
+        <span class="signal-portal-index-separator" aria-hidden="true"></span>
+        <span>NYC</span>
+      </div>
+      <div class="signal-portal-connection" aria-live="polite">
+        <span class="signal-portal-status-dot" id="signal-portal-status-dot" aria-hidden="true"></span>
+        <span id="signal-portal-status">Connecting to live network</span>
+      </div>
+    </header>
+
+    <div class="signal-portal-center">
+      <div class="signal-portal-kicker" aria-hidden="true">
+        <span>40.7769° N</span>
+        <span>73.8740° W</span>
+        <span>KLGA / NEW YORK</span>
+      </div>
+
+      <div class="signal-portal-logo-frame">
+        <svg class="signal-portal-logo" viewBox="0 300 1254 650" role="img"
+             aria-labelledby="signal-portal-logo-title" preserveAspectRatio="xMidYMid meet">
+          <title id="signal-portal-logo-title">InfraWave</title>
+          <defs>
+            <filter id="signal-portal-logo-knockout" x="0" y="0" width="1254" height="1254"
+                    filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+              <feColorMatrix type="matrix" values="
+                0 0 0 0 1
+                0 0 0 0 1
+                0 0 0 0 1
+                -0.3333 -0.3333 -0.3333 0 1">
+              </feColorMatrix>
+              <feComponentTransfer>
+                <feFuncA type="linear" slope="1.35" intercept="-0.12"></feFuncA>
+              </feComponentTransfer>
+            </filter>
+          </defs>
+          <image href="Source/ChatGPT%20Image%202026%E5%B9%B47%E6%9C%8823%E6%97%A5%2011_53_44.png"
+                 x="0" y="0" width="1254" height="1254"
+                 filter="url(#signal-portal-logo-knockout)"></image>
+        </svg>
+      </div>
+      <h1 class="signal-portal-visually-hidden" id="signal-portal-title">InfraWave</h1>
+      <p class="signal-portal-subtitle" id="signal-portal-subtitle">
+        Telecommunication Above <span aria-hidden="true">&amp;</span><span class="signal-portal-visually-hidden">and</span> Below New York
+      </p>
+
+      <div class="signal-portal-live" aria-label="Live network summary">
+        <div>
+          <span class="signal-portal-live-value" id="signal-portal-flights">0</span>
+          <span class="signal-portal-live-label">Flights</span>
+        </div>
+        <span class="signal-portal-live-divider" aria-hidden="true"></span>
+        <div>
+          <span class="signal-portal-live-value" id="signal-portal-subways">0</span>
+          <span class="signal-portal-live-label">Subways</span>
+        </div>
+        <span class="signal-portal-live-divider" aria-hidden="true"></span>
+        <div>
+          <span class="signal-portal-live-value">24 H</span>
+          <span class="signal-portal-live-label">Atmosphere</span>
+        </div>
+      </div>
+
+      <button class="signal-portal-enter" id="signal-portal-enter" type="button">
+        <span class="signal-portal-enter-orbit" aria-hidden="true"></span>
+        <span class="signal-portal-enter-label">Explore Atmosphere</span>
+        <span class="signal-portal-enter-arrow" aria-hidden="true">&rarr;</span>
+      </button>
+      <p class="signal-portal-interaction-hint">
+        Move to disturb the signal <span aria-hidden="true">&middot;</span> Touch to transmit
+      </p>
+    </div>
+
+    <footer class="signal-portal-footer">
+      <div class="signal-portal-credit">
+        <span>Cornell University MS. AUD</span>
+        <span>ARCH 6133 &ndash; Advanced Synthesis</span>
+      </div>
+      <div class="signal-portal-credit signal-portal-credit-right">
+        <span>Author: Yusen Guo &amp; Yiguang WU</span>
+        <span>Tutor: Dan Miller</span>
+      </div>
+    </footer>
+  </section>
+
   <header class="topbar">
     <div class="topbar-brand-summary">
       <div class="brand">
@@ -4558,5 +4656,6 @@
 </script>
 <script src="assets/js/integrated-flight-tracker.js"></script>
 <script src="assets/js/display-mode.js"></script>
+<script src="assets/js/signal-portal.js"></script>
 </body>
 </html>
