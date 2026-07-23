@@ -181,6 +181,16 @@ button { font: inherit; }
 }
 #controls .panel:first-child .panel-box { left: 0; }
 #controls .panel:last-child .panel-box { right: 0; }
+@media (min-width: 768px) {
+  #controls .panel:not(.collapsed) .panel-box {
+    position: fixed;
+    top: calc(106px - 18px);
+    right: calc(380px + 12px);
+    left: auto;
+    width: 340px;
+    max-height: calc(100vh - 134px);
+  }
+}
 #controls .group-label {
   margin: 4px 0 8px;
   color: var(--interface-muted);
