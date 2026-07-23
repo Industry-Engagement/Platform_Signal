@@ -11,19 +11,19 @@ Version 1 rules, workbook, source flight data, and existing visual presentation 
 ```text
 actual OpenSky observation A
         |
-        v
+        |
 predict one-second positions for the next 30 seconds
         |
-        v
+        |
 calculate provisional phase, one frequency, and signal loss
         |
-        v
+        |
 actual OpenSky observation B arrives
         |
-        v
-replace only provisional V2 samples with A-to-B interpolation
         |
-        v
+replace only provisional samples with A-to-B interpolation
+        |
+        |
 recalculate and finalize the one-second derived interval
 ```
 
