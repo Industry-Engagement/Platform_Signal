@@ -48,7 +48,6 @@
     subwayRoutes3D: null,
     subwayStations3D: null,
     subwayStationsColor: null,
-    subwayTrains: null,
     activeSubwayRouteId: null,
     selectedTrainRouteId: null,
     selectedSignalHistory: [],
@@ -104,11 +103,8 @@
   // Non-focused routes dim to this while another route/train/flight has focus -- the Plan
   // View equivalent is RouteDimColor + RouteDimOpacity in index.html (kept as a separate CSS
   // color + opacity pair there since MapLibre paint properties don't take RGBA arrays).
-  var ROUTE_DIM_COLOR = [217, 217, 217, 128];   // light grey at 50% opacity
-  // assets/subway-centered.glb is centered by scripts/center-subway-glb.mjs. Raise its
-  // center by half its measured height so its lowest point rests on the train-dot plane.
-  var SUBWAY_MODEL_HALF_HEIGHT_M = 3.9249777 / 2;
-  var SUBWAY_MODEL_YAW_OFFSET_DEG = 0;
+  var ROUTE_DIM_COLOR = [235, 239, 242, 41];   // light grey at 16% opacity
+  var NORMAL_MODEL_COLOR = [255, 255, 255, 255];
 
   function hexToRgba(hex, alpha) {
     var value = parseInt(String(hex).replace("#", ""), 16);
@@ -227,37 +223,6 @@
         updateTriggers: { getLineColor: state.subwayStationsColor }
       })
     ];
-  }
-
-  function makeSubwayTrainLayer(mode) {
-    var data = state.subwayTrains && state.subwayTrains.features
-      ? state.subwayTrains.features
-      : [];
-    var is3D = mode === "3d";
-    return new deck.ScenegraphLayer({
-      id: (is3D ? "three-d-" : "plan-") + "subway-train-models",
-      data: data,
-      scenegraph: "/assets/subway-centered.glb",
-      getPosition: function (feature) {
-        var coordinates = feature.geometry.coordinates;
-        return [coordinates[0], coordinates[1], SUBWAY_MODEL_HALF_HEIGHT_M];
-      },
-      // The GLB is Y-up with its 23m longitudinal axis on local Z. A 90-degree roll seats
-      // it on the map plane; yaw then follows the route tangent computed in index.html.
-      getOrientation: function (feature) {
-        return [0, (Number(feature.properties.heading) || 0) + SUBWAY_MODEL_YAW_OFFSET_DEG, 90];
-      },
-      getScale: [1, 1, 1],
-      sizeScale: is3D ? 1.15 : 1,
-      sizeMinPixels: is3D ? 1.25 : 1,
-      sizeMaxPixels: is3D ? 4 : 3,
-      _lighting: "pbr",
-      pickable: false,
-      // The 3D route intentionally remains visible through buildings/ground. Give its
-      // train models the same visibility behavior while leaving Plan View depth-normal.
-      parameters: is3D ? DEPTH_ALWAYS : undefined,
-      updateTriggers: { getOrientation: [state.subwayTrains] }
-    });
   }
 
   function filteredFlights() {
@@ -458,16 +423,25 @@
         getPosition: flightPosition,
         getRadius: 8,
         radiusUnits: "pixels",
-        getFillColor: function (flight) { return statusColor(flight, 115); },
+        getFillColor: function (flight) {
+          return flight.icao24 !== state.selectedIcao24 && routeFocusExists()
+            ? ROUTE_DIM_COLOR
+            : statusColor(flight, 115);
+        },
         getLineColor: function (flight) {
-          return flight.icao24 === state.selectedIcao24 ? COLORS.selected : statusColor(flight, 255);
+          if (flight.icao24 === state.selectedIcao24) return COLORS.selected;
+          return routeFocusExists() ? ROUTE_DIM_COLOR : statusColor(flight, 255);
         },
         lineWidthUnits: "pixels",
         getLineWidth: function (flight) { return flight.icao24 === state.selectedIcao24 ? 3 : 1.5; },
         stroked: true,
         pickable: true,
         onClick: onPick,
-        updateTriggers: { getLineColor: state.selectedIcao24, getLineWidth: state.selectedIcao24 }
+        updateTriggers: {
+          getFillColor: [state.selectedIcao24, state.activeSubwayRouteId, state.selectedTrainRouteId],
+          getLineColor: [state.selectedIcao24, state.activeSubwayRouteId, state.selectedTrainRouteId],
+          getLineWidth: state.selectedIcao24
+        }
       }),
       new deck.ScenegraphLayer({
         id: prefix + "dc8-aircraft-models",
@@ -475,6 +449,11 @@
         scenegraph: "/assets/plane.glb",
         getPosition: flightPosition,
         getOrientation: function (flight) { return [0, flightHeading(flight), 90]; },
+        getColor: function (flight) {
+          return flight.icao24 !== state.selectedIcao24 && routeFocusExists()
+            ? ROUTE_DIM_COLOR
+            : NORMAL_MODEL_COLOR;
+        },
         getScale: [aircraftModelScale, aircraftModelScale, aircraftModelScale],
         sizeScale: 1,
         sizeMinPixels: 10,
@@ -483,7 +462,10 @@
         pickable: true,
         autoHighlight: true,
         highlightColor: [255, 255, 255, 100],
-        onClick: onPick
+        onClick: onPick,
+        updateTriggers: {
+          getColor: [state.selectedIcao24, state.activeSubwayRouteId, state.selectedTrainRouteId]
+        }
       })
     );
     return layers;
@@ -491,14 +473,13 @@
 
   function updateFlightLayers() {
     if (state.planOverlay) {
-      state.planOverlay.setProps({ layers: makeFlightLayers("plan").concat([makeSubwayTrainLayer("plan")]) });
+      state.planOverlay.setProps({ layers: makeFlightLayers("plan") });
     }
     if (state.threeDOverlay) {
       // Array order is z-order. Subway routes go FIRST so flight trails/planes paint on top of
-      // them -- flight routes were previously being hidden underneath the subway lines. Live
-      // subway train models stay last so they remain visible above everything.
+      // them -- flight routes were previously being hidden underneath the subway lines.
       state.threeDOverlay.setProps({
-        layers: makeThreeDSubwayLayer().concat(makeFlightLayers("3d"), [makeSubwayTrainLayer("3d")])
+        layers: makeThreeDSubwayLayer().concat(makeFlightLayers("3d"))
       });
       // The subway layers above register as native layers and can land above the live
       // train dots' native circle layer -- reassert that trains render on top of them.
@@ -1533,13 +1514,11 @@
   });
   document.addEventListener("platform:subways-updated", function (event) {
     var detail = event.detail || {};
-    state.subwayTrains = detail.featureCollection || null;
     ui.subwayCount.textContent = detail.count == null ? "0" : String(detail.count);
     ui.subwayLines.textContent = detail.visibleRoutes && detail.visibleRoutes.length
       ? detail.visibleRoutes.join(" + ")
       : "None";
     ui.subwayUpdate.textContent = detail.updatedAt ? formatClock(detail.updatedAt) : "--";
-    updateFlightLayers();
   });
 
   bindStatusFilter();

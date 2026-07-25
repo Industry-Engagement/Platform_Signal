@@ -770,8 +770,8 @@
   // Non-focused routes dim to this (Plan View only -- the 3D View equivalent is
   // ROUTE_DIM_COLOR in assets/js/integrated-flight-tracker.js, kept separate since deck.gl
   // needs an RGBA array rather than a CSS color + opacity pair).
-  var RouteDimColor = "#d9d9d9";
-  var RouteDimOpacity = 0.5;
+  var RouteDimColor = "#ebeff2";
+  var RouteDimOpacity = 0.16;
   // =================================================================
 
   // Station/profile layout for the selected subway route
@@ -994,6 +994,7 @@
     renderStationDotRow();
     draw();
     syncActiveRouteHighlight();
+    renderTrains();
     if (activeRouteId) renderSubwayRouteDetails(activeRouteId);
     else if (previousRouteId) closeSubwayRouteDetails();
     if (activeRouteId) requestSubwayCameraFocus(currentMapViewMode());
@@ -2416,6 +2417,7 @@
     if (previousIcao24 !== nextIcao24) resetActiveSectionSignal();
     activeSectionFlight = flight || null;
     syncPlanRouteFocusStyles();
+    renderTrains();
     if (activeSectionFlight && activeSectionFlight.signal_v2) {
       activeSectionLiveSignal = activeSectionFlight.signal_v2.live_current ||
         activeSectionFlight.signal_v2.current || null;
@@ -3638,10 +3640,20 @@
           9, ["case", ["boolean", ["get", "selected"], false], 10, 4],
           14, ["case", ["boolean", ["get", "selected"], false], 14, 9]
         ],
-        "circle-color": ["case", ["boolean", ["get", "selected"], false], White, ["get", "color"]],
-        "circle-stroke-color": SubwayOutlineColor,
+        "circle-color": ["case",
+          ["boolean", ["get", "selected"], false], White,
+          ["boolean", ["get", "focusDimmed"], false], RouteDimColor,
+          ["get", "color"]
+        ],
+        "circle-stroke-color": ["case",
+          ["boolean", ["get", "focusDimmed"], false], RouteDimColor,
+          SubwayOutlineColor
+        ],
         "circle-stroke-width": ["case", ["boolean", ["get", "selected"], false], 3, 1],
-        "circle-opacity": 0.9
+        "circle-opacity": ["case",
+          ["boolean", ["get", "focusDimmed"], false], RouteDimOpacity,
+          0.9
+        ]
       }
     });
     planMap.on("click", "live-trains", function (e) {
@@ -3669,10 +3681,20 @@
           9, ["case", ["boolean", ["get", "selected"], false], 14, 4],
           16, ["case", ["boolean", ["get", "selected"], false], 20, 10]
         ],
-        "circle-color": ["case", ["boolean", ["get", "selected"], false], White, ["get", "color"]],
-        "circle-stroke-color": SubwayOutlineColor,
+        "circle-color": ["case",
+          ["boolean", ["get", "selected"], false], White,
+          ["boolean", ["get", "focusDimmed"], false], RouteDimColor,
+          ["get", "color"]
+        ],
+        "circle-stroke-color": ["case",
+          ["boolean", ["get", "focusDimmed"], false], RouteDimColor,
+          SubwayOutlineColor
+        ],
         "circle-stroke-width": ["case", ["boolean", ["get", "selected"], false], 3, 2],
-        "circle-opacity": 0.95
+        "circle-opacity": ["case",
+          ["boolean", ["get", "focusDimmed"], false], RouteDimOpacity,
+          0.95
+        ]
       }
     });
     threeDMap.on("click", "three-d-live-trains", function (e) {
@@ -3874,7 +3896,15 @@
         geometry: { type: "Point", coordinates: coordinates },
         properties: {
           route: t.routeId, tripId: t.tripId, color: TrainColors[t.routeId] || NA, nextStop: stop.name,
-          selected: t.tripId === selectedTrainTripId, heading: heading
+          selected: t.tripId === selectedTrainTripId,
+          focusDimmed: activeSectionFlight
+            ? true
+            : selectedTrainTripId
+              ? t.tripId !== selectedTrainTripId
+              : activeRouteId
+                ? t.routeId !== activeRouteId
+                : false,
+          heading: heading
         }
       });
     });
@@ -3953,11 +3983,8 @@
     });
   }
 
-  // Broadcasts the current train featureCollection. integrated-flight-tracker.js listens for
-  // this to drive the deck.gl "subway-train-models" ScenegraphLayer -- the literal 3D train
-  // models -- so it has to fire every time the dots' positions change (both the 15s network
-  // poll via renderTrains, and the 1s smooth-motion tick via tickTrainAnimation), not just on
-  // real fetches, or the models would sit frozen between polls while the dots glide past them.
+  // Broadcasts the current train featureCollection so the shared train summary and
+  // route-details consumers stay synchronized with the native Plan/3D train dots.
   function dispatchSubwaysUpdated(geojson, allGeojson) {
     document.dispatchEvent(new CustomEvent("platform:subways-updated", {
       detail: {
