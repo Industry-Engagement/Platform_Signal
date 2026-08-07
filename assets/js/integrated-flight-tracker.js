@@ -349,14 +349,11 @@
       });
     }
     function flightPosition(flight) {
+      // Always the same source (flight.current) whether or not this flight is selected, so
+      // selecting a flight never shifts its rendered icon: signal_v2.live_current is a
+      // separately-modeled point (for the signal-strength/audio timeline) that doesn't line
+      // up pixel-for-pixel with the tracker's own position feed.
       var current = flight.current;
-      if (flight.icao24 === state.selectedIcao24 && flight.signal_v2 && flight.signal_v2.live_current) {
-        var live = flight.signal_v2.live_current;
-        if (finiteNumber(live.aircraft_lon) != null && finiteNumber(live.aircraft_lat) != null) {
-          return [Number(live.aircraft_lon), Number(live.aircraft_lat),
-            is3D ? Math.max(0, Number(live.aircraft_altitude_m) || 0) : 0];
-        }
-      }
       return [current.longitude, current.latitude, is3D ? Number(current.altitude_m || 0) : 0];
     }
     function flightHeading(flight) {
